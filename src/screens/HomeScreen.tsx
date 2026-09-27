@@ -3,12 +3,15 @@ import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-nati
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { JraRace, RaceNotice } from "../domain/live";
 import { raceStartEpoch } from "../data/jra/oddsAvailability";
+import { raceCourseLabel } from "../ui/raceLabels";
 import { listRacingWeekRaces, listTodayNotices, localTodayIso } from "../repositories/liveRepository";
 import { refreshCurrentWeekRaceData } from "../services/raceRefreshService";
 
 type Props = {
   onOpenWeek: () => void;
   onOpenRace: (raceKey: string) => void;
+  active?: boolean;
+  cacheRevision?: number;
 };
 
 const WEEKDAY = ["日","月","火","水","木","金","土"];
@@ -39,7 +42,7 @@ function raceDateShort(iso: string) {
   return `${m}/${d}(${WEEKDAY[date.getDay()]})`;
 }
 
-export function HomeScreen({ onOpenWeek, onOpenRace }: Props) {
+export function HomeScreen({ onOpenWeek, onOpenRace, active = true, cacheRevision = 0 }: Props) {
   const [notices, setNotices] = useState<RaceNotice[]>([]);
   const [races, setRaces] = useState<JraRace[]>([]);
   const [refreshing, setRefreshing] = useState(false);
@@ -68,10 +71,9 @@ export function HomeScreen({ onOpenWeek, onOpenRace }: Props) {
   }, [load, refreshing]);
 
   useEffect(() => {
-    void load().then((current) => {
-      if (!current.length) void refresh();
-    });
-  }, [load]);
+    if (!active) return;
+    void load();
+  }, [active, cacheRevision, load]);
 
   const raceDates = useMemo(() => [...new Set(races.map((race) => race.raceDate))].sort(), [races]);
   const today = localTodayIso();
@@ -138,7 +140,7 @@ export function HomeScreen({ onOpenWeek, onOpenRace }: Props) {
               <View style={styles.flex1}>
                 <Text style={styles.nextRaceName}>{nextRace.raceName ?? "レース名取得待ち"}</Text>
                 <Text style={styles.nextMeta}>
-                  {[nextRace.surface, nextRace.distanceM ? nextRace.distanceM.toLocaleString() + "m" : null, nextRace.direction, nextRace.weather, nextRace.trackCondition].filter(Boolean).join(" / ")}
+                  {[raceCourseLabel(nextRace), nextRace.weather, nextRace.trackCondition].filter(Boolean).join(" / ")}
                 </Text>
               </View>
               <Text style={styles.chevron}>›</Text>

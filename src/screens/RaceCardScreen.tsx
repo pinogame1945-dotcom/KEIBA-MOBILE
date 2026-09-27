@@ -13,11 +13,15 @@ import {
 import { refreshRaceState } from "../services/raceRefreshService";
 import { loadOdds, oddsBetTypeLabel, refreshLatestOdds } from "../services/oddsService";
 import { refreshOfficialRaceResult } from "../services/resultService";
+import { raceCourseLabel, raceStateLabel } from "../ui/raceLabels";
 
 type Props = {
   raceKey: string;
   onOpenWeek: () => void;
   onOpenRace: (raceKey: string) => void;
+  onBack?: () => void;
+  active?: boolean;
+  cacheRevision?: number;
 };
 
 type RaceTab = "CARD" | "ODDS" | "INFO" | "RESULT";
@@ -73,13 +77,6 @@ function freshnessText(iso: string | null, nowMs: number) {
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `約${minutes}分前`;
   return `約${Math.floor(minutes / 60)}時間前`;
-}
-
-function raceState(race: JraRace, hasResult: boolean) {
-  if (hasResult) return "結果確定";
-  const start = raceStartEpoch(race);
-  if (start != null && start <= Date.now()) return "結果待ち";
-  return race.status === "OFFICIAL" ? "発走前" : "予定";
 }
 
 function resultStatusLabel(result: JraRaceResult) {
@@ -144,7 +141,14 @@ function HorseSheet({
   );
 }
 
-export function RaceCardScreen({ raceKey, onOpenWeek, onOpenRace }: Props) {
+export function RaceCardScreen({
+  raceKey,
+  onOpenWeek,
+  onOpenRace,
+  onBack,
+  active = true,
+  cacheRevision = 0,
+}: Props) {
   const [race, setRace] = useState<JraRace | null>(null);
   const [entries, setEntries] = useState<JraEntry[]>([]);
   const [dayRaces, setDayRaces] = useState<JraRace[]>([]);
@@ -200,16 +204,23 @@ export function RaceCardScreen({ raceKey, onOpenWeek, onOpenRace }: Props) {
     setRaceTab("CARD");
     setOddsView("NORMAL");
     setSortMode("HORSE_NO");
-    void load();
+    setError(null);
   }, [raceKey]);
 
   useEffect(() => {
-    const timer = setInterval(() => setNowMs(Date.now()), 15_000);
-    return () => clearInterval(timer);
-  }, []);
+    if (!active) return;
+    void load();
+  }, [active, cacheRevision, raceKey]);
 
   useEffect(() => {
-    if (!race || race.status !== "OFFICIAL" || !entries.length || autoOddsStarted.current) return;
+    if (!active) return;
+    setNowMs(Date.now());
+    const timer = setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, [active]);
+
+  useEffect(() => {
+    if (!active || !race || race.status !== "OFFICIAL" || !entries.length || autoOddsStarted.current) return;
     const start = raceStartEpoch(race);
     if (start != null && start <= Date.now()) return;
     const latestMs = latestObservedAt ? Date.parse(latestObservedAt) : 0;
@@ -219,7 +230,7 @@ export function RaceCardScreen({ raceKey, onOpenWeek, onOpenRace }: Props) {
   }, [race, entries, latestObservedAt, load]);
 
   useEffect(() => {
-    if (raceTab !== "RESULT" || !race || results.length || busy || autoResultRaceKey.current === race.raceKey) return;
+    if (!active || raceTab !== "RESULT" || !race || results.length || busy || autoResultRaceKey.current === race.raceKey) return;
     const start = raceStartEpoch(race);
     if (start != null && start > Date.now()) return;
     autoResultRaceKey.current = race.raceKey;
@@ -311,14 +322,14 @@ export function RaceCardScreen({ raceKey, onOpenWeek, onOpenRace }: Props) {
     return <SafeAreaView edges={["top"]} style={styles.safeArea}><View style={styles.loading}><ActivityIndicator /></View></SafeAreaView>;
   }
 
-  const status = raceState(race, results.length > 0);
+  const status = raceStateLabel(race, results.length > 0);
   const isFuture = (raceStartEpoch(race) ?? Infinity) > Date.now();
 
   return (
     <SafeAreaView edges={["top"]} style={styles.safeArea}>
       <ScrollView contentContainerStyle={styles.container}>
         <View style={styles.topBar}>
-          <TouchableOpacity style={styles.topSide} onPress={onOpenWeek}><Text style={styles.backArrow}>←</Text></TouchableOpacity>
+          <TouchableOpacity style={styles.topSide} onPress={onBack ?? onOpenWeek}><Text style={styles.backArrow}>←</Text></TouchableOpacity>
           <Text style={styles.topTitle}>{race.venue} {race.raceNo}R</Text>
           <View style={[styles.topSide, styles.topRight]}><Text style={styles.liveText}>● LIVE</Text></View>
         </View>
@@ -331,7 +342,7 @@ export function RaceCardScreen({ raceKey, onOpenWeek, onOpenRace }: Props) {
                 <Text style={styles.heroTitle}>{race.raceName ?? "レース名取得待ち"}</Text>
               </View>
               <Text style={styles.heroMeta}>
-                {[race.raceClass, race.surface, race.distanceM ? race.distanceM.toLocaleString() + "m" : null, race.direction, race.weather, race.trackCondition].filter(Boolean).join("　")}
+                {[race.raceClass, raceCourseLabel(race), race.weather, race.trackCondition].filter(Boolean).join("　")}
               </Text>
             </View>
             <View style={styles.statusPill}><Text style={styles.statusText}>{status}</Text></View>
@@ -362,7 +373,11 @@ export function RaceCardScreen({ raceKey, onOpenWeek, onOpenRace }: Props) {
           {([
             ["CARD","出走表"],["ODDS","オッズ"],["INFO","レース情報"],["RESULT","結果"],
           ] as Array<[RaceTab,string]>).map(([tab,label]) => (
-            <TouchableOpacity key={tab} style={[styles.raceTab, raceTab === tab && styles.raceTabActive]} onPress={() => setRaceTab(tab)}>
+            <TouchableOpacity
+              key={tab}
+              style={[styles.raceTab, raceTab === tab && styles.raceTabActive]}
+              onPress={() => { setRaceTab(tab); setError(null); }}
+            >
               <Text style={[styles.raceTabText, raceTab === tab && styles.raceTabTextActive]}>{label}</Text>
             </TouchableOpacity>
           ))}
@@ -390,7 +405,7 @@ export function RaceCardScreen({ raceKey, onOpenWeek, onOpenRace }: Props) {
             </View>
 
             {race.status !== "OFFICIAL" ? (
-              <View style={styles.card}><Text style={styles.muted}>正式出馬表の公開待ち。</Text></View>
+              <View style={styles.card}><Text style={styles.muted}>{status === "データ修復中" ? "正式出馬表を自動修復中。" : "正式出馬表の公開待ち。"}</Text></View>
             ) : !entries.length ? (
               <View style={styles.card}>
                 <Text style={styles.muted}>出走馬データがない。出馬表を再取得する。</Text>
@@ -537,7 +552,7 @@ export function RaceCardScreen({ raceKey, onOpenWeek, onOpenRace }: Props) {
           <View style={styles.infoTable}>
             <View style={styles.infoRow}><Text style={styles.infoKey}>発走</Text><Text style={styles.infoValue}>{race.startTime ?? "-"}</Text></View>
             <View style={styles.infoRow}><Text style={styles.infoKey}>条件</Text><Text style={styles.infoValue}>{race.raceClass ?? "-"}</Text></View>
-            <View style={styles.infoRow}><Text style={styles.infoKey}>コース</Text><Text style={styles.infoValue}>{[race.surface, race.distanceM ? race.distanceM.toLocaleString() + "m" : null, race.direction].filter(Boolean).join(" ") || "-"}</Text></View>
+            <View style={styles.infoRow}><Text style={styles.infoKey}>コース</Text><Text style={styles.infoValue}>{raceCourseLabel(race) || "-"}</Text></View>
             <View style={styles.infoRow}><Text style={styles.infoKey}>天候</Text><Text style={styles.infoValue}>{race.weather ?? "-"}</Text></View>
             <View style={styles.infoRow}><Text style={styles.infoKey}>馬場</Text><Text style={styles.infoValue}>{race.trackCondition ?? "-"}</Text></View>
             <View style={styles.infoRow}><Text style={styles.infoKey}>出走</Text><Text style={styles.infoValue}>{entries.filter((entry) => entry.entryStatus === "ACTIVE").length || "-"}頭</Text></View>

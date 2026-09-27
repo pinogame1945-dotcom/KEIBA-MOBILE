@@ -5,6 +5,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { JraRace } from "../domain/live";
 import { raceStartEpoch } from "../data/jra/oddsAvailability";
+import { raceCourseLabel, raceStateLabel, surfaceLabel } from "../ui/raceLabels";
 import {
   listRaceKeysWithResults, listRacingWeekRaces, localTodayIso, racingWeekCandidateDates,
 } from "../repositories/liveRepository";
@@ -14,6 +15,9 @@ import {
 
 type Props = {
   onOpenRace: (raceKey: string) => void;
+  onBack?: () => void;
+  active?: boolean;
+  cacheRevision?: number;
 };
 
 const WEEKDAY = ["日","月","火","水","木","金","土"];
@@ -24,14 +28,12 @@ function dateLabel(iso: string) {
   return `${m}/${d}(${WEEKDAY[date.getDay()]})`;
 }
 
-function raceStateLabel(race: JraRace, resultKeys: Set<string>, now = Date.now()) {
-  if (resultKeys.has(race.raceKey)) return "結果確定";
-  const start = raceStartEpoch(race);
-  if (start != null && start <= now) return "結果待ち";
-  return race.status === "OFFICIAL" ? "出馬表" : "予定";
-}
-
-export function WeekRacesScreen({ onOpenRace }: Props) {
+export function WeekRacesScreen({
+  onOpenRace,
+  onBack,
+  active = true,
+  cacheRevision = 0,
+}: Props) {
   const [races, setRaces] = useState<JraRace[]>([]);
   const [resultKeys, setResultKeys] = useState<Set<string>>(new Set());
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -66,10 +68,9 @@ export function WeekRacesScreen({ onOpenRace }: Props) {
   }, [load, refreshing]);
 
   useEffect(() => {
-    void load().then((current) => {
-      if (!current.length) void refresh();
-    });
-  }, [load]);
+    if (!active) return;
+    void load();
+  }, [active, cacheRevision, load]);
 
   const actualDates = useMemo(
     () => [...new Set(races.map((race) => race.raceDate))].sort(),
@@ -116,7 +117,9 @@ export function WeekRacesScreen({ onOpenRace }: Props) {
     <SafeAreaView edges={["top"]} style={styles.safeArea}>
       <ScrollView contentContainerStyle={styles.container}>
         <View style={styles.header}>
-          <View style={styles.headerSide} />
+          <View style={styles.headerSide}>
+            {onBack ? <TouchableOpacity onPress={onBack}><Text style={styles.backArrow}>←</Text></TouchableOpacity> : null}
+          </View>
           <Text style={styles.title}>今週のレース</Text>
           <TouchableOpacity style={styles.headerSide} onPress={() => void refresh()} disabled={refreshing}>
             <Text style={styles.live}>{refreshing ? "更新中" : "● LIVE"}</Text>
@@ -168,7 +171,7 @@ export function WeekRacesScreen({ onOpenRace }: Props) {
             <View>
               <Text style={styles.venueStatusTitle}>{selectedVenue}</Text>
               <Text style={styles.venueStatusMeta}>
-                {[venueStatusRace.weather, venueStatusRace.surface, venueStatusRace.trackCondition].filter(Boolean).join(" / ") || "状態取得待ち"}
+                {[venueStatusRace.weather, surfaceLabel(venueStatusRace.surface), venueStatusRace.trackCondition].filter(Boolean).join(" / ") || "状態取得待ち"}
               </Text>
             </View>
             <Text style={styles.updated}>最終更新 {venueStatusRace.fetchedAt.slice(11,16)}</Text>
@@ -183,7 +186,7 @@ export function WeekRacesScreen({ onOpenRace }: Props) {
         ) : null}
 
         {visible.map((race) => {
-          const state = raceStateLabel(race, resultKeys, now);
+          const state = raceStateLabel(race, resultKeys.has(race.raceKey), now);
           const isNext = race.raceKey === nextRaceKey;
           const isPast = (raceStartEpoch(race) ?? Infinity) <= now;
           return (
@@ -201,7 +204,7 @@ export function WeekRacesScreen({ onOpenRace }: Props) {
               <View style={styles.raceMain}>
                 <Text style={styles.raceName}>{race.raceName ?? "レース名取得待ち"}</Text>
                 <Text style={styles.raceMeta}>
-                  {[race.raceClass, race.surface, race.distanceM ? race.distanceM.toLocaleString() + "m" : null, race.direction].filter(Boolean).join("　") || "詳細取得待ち"}
+                  {[race.raceClass, raceCourseLabel(race)].filter(Boolean).join("　") || "詳細取得待ち"}
                 </Text>
                 <Text style={styles.raceCondition}>
                   {[race.weather, race.trackCondition, state].filter(Boolean).join(" / ")}
@@ -220,7 +223,8 @@ const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: "#f4f6f8" },
   container: { padding: 16, paddingBottom: 28, gap: 12 },
   header: { height: 48, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  headerSide: { width: 72, alignItems: "flex-end" },
+  headerSide: { width: 72, alignItems: "flex-start" },
+  backArrow: { color: "#111827", fontSize: 28, fontWeight: "800" },
   title: { fontSize: 24, fontWeight: "900", color: "#111827" },
   live: { color: "#6b7280", fontSize: 11, fontWeight: "900" },
   progress: { backgroundColor: "#fff", borderRadius: 12, padding: 10, flexDirection: "row", alignItems: "center", gap: 8 },
