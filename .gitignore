@@ -2,5 +2,6 @@ node_modules/
 .expo/
 android/
 ios/
+dist-android-smoke/
 *.log
 .DS_Store
