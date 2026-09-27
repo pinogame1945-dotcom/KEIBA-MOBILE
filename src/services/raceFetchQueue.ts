@@ -1,4 +1,4 @@
-import { getLiveDb } from "../storage/liveDb";
+import { getLiveDb, withLiveDbTransaction, withLiveDbWrite } from "../storage/liveDb";
 
 export type RaceFetchItem = {
   url: string;
@@ -55,7 +55,7 @@ export async function prepareRaceFetchRun(targetFingerprint: string) {
   const reusable = sameTarget && stats.total > 0;
 
   if (reusable) {
-    await db.withTransactionAsync(async () => {
+    await withLiveDbTransaction(async (db) => {
       const unfinished = stats.pending + stats.fetching + stats.retry + stats.failed;
       if (state?.value === "COMPLETED" || unfinished === 0) {
         // Same schedule target: reuse known formal race URLs instead of repeating
@@ -79,7 +79,7 @@ export async function prepareRaceFetchRun(targetFingerprint: string) {
     return { resumed: true };
   }
 
-  await db.withTransactionAsync(async () => {
+  await withLiveDbTransaction(async (db) => {
     await db.runAsync("DELETE FROM race_fetch_queue");
     await db.runAsync(
       "INSERT INTO meta(key,value) VALUES('race_fetch_state','RUNNING') " +
@@ -107,7 +107,7 @@ export async function enqueueRaceFetchUrl(input: {
   venue?: string | null;
   raceNo?: number | null;
 }) {
-  const db = await getLiveDb();
+  await withLiveDbWrite(async (db) => {
   await db.runAsync(
     `INSERT INTO race_fetch_queue(
       url,target_fingerprint,status,attempts,race_date,venue,race_no,last_error,updated_at
@@ -120,56 +120,60 @@ export async function enqueueRaceFetchUrl(input: {
       updated_at=CURRENT_TIMESTAMP`,
     input.url,input.targetFingerprint,input.raceDate ?? null,input.venue ?? null,input.raceNo ?? null,
   );
+  });
 }
 
 export async function claimNextRaceFetchItem(): Promise<RaceFetchItem | null> {
-  const db = await getLiveDb();
-  const row = await db.getFirstAsync<{
-    url: string; status: RaceFetchItem["status"]; attempts: number;
-    raceDate: string | null; venue: string | null; raceNo: number | null; lastError: string | null;
-  }>(
-    `SELECT url,status,attempts,race_date AS raceDate,venue,race_no AS raceNo,last_error AS lastError
-     FROM race_fetch_queue
-     WHERE status IN ('PENDING','RETRY') AND attempts<3
-     ORDER BY attempts,CASE WHEN race_no IS NULL THEN 1 ELSE 0 END,race_date,venue,race_no,url
-     LIMIT 1`,
-  );
-  if (!row) return null;
+  return withLiveDbTransaction(async (db) => {
+    const row = await db.getFirstAsync<{
+      url: string; status: RaceFetchItem["status"]; attempts: number;
+      raceDate: string | null; venue: string | null; raceNo: number | null; lastError: string | null;
+    }>(
+      `SELECT url,status,attempts,race_date AS raceDate,venue,race_no AS raceNo,last_error AS lastError
+       FROM race_fetch_queue
+       WHERE status IN ('PENDING','RETRY') AND attempts<3
+       ORDER BY attempts,CASE WHEN race_no IS NULL THEN 1 ELSE 0 END,race_date,venue,race_no,url
+       LIMIT 1`,
+    );
+    if (!row) return null;
 
-  const changed = await db.runAsync(
-    `UPDATE race_fetch_queue
-     SET status='FETCHING',attempts=attempts+1,last_error=NULL,updated_at=CURRENT_TIMESTAMP
-     WHERE url=? AND status IN ('PENDING','RETRY')`,
-    row.url,
-  );
-  if (Number(changed.changes ?? 0) === 0) return claimNextRaceFetchItem();
+    const changed = await db.runAsync(
+      `UPDATE race_fetch_queue
+       SET status='FETCHING',attempts=attempts+1,last_error=NULL,updated_at=CURRENT_TIMESTAMP
+       WHERE url=? AND status IN ('PENDING','RETRY')`,
+      row.url,
+    );
+    if (Number(changed.changes ?? 0) === 0) return null;
 
-  return {
-    url: row.url,
-    status: "FETCHING",
-    attempts: Number(row.attempts ?? 0) + 1,
-    raceDate: row.raceDate ?? null,
-    venue: row.venue ?? null,
-    raceNo: row.raceNo == null ? null : Number(row.raceNo),
-    lastError: null,
-  };
+    return {
+      url: row.url,
+      status: "FETCHING",
+      attempts: Number(row.attempts ?? 0) + 1,
+      raceDate: row.raceDate ?? null,
+      venue: row.venue ?? null,
+      raceNo: row.raceNo == null ? null : Number(row.raceNo),
+      lastError: null,
+    };
+  });
 }
 
 export async function markRaceFetchDone(url: string) {
-  const db = await getLiveDb();
-  await db.runAsync(
-    "UPDATE race_fetch_queue SET status='DONE',last_error=NULL,updated_at=CURRENT_TIMESTAMP WHERE url=?",
-    url,
-  );
+  await withLiveDbWrite(async (db) => {
+    await db.runAsync(
+      "UPDATE race_fetch_queue SET status='DONE',last_error=NULL,updated_at=CURRENT_TIMESTAMP WHERE url=?",
+      url,
+    );
+  });
 }
 
 export async function markRaceFetchFailed(url: string, attempts: number, error: unknown) {
-  const db = await getLiveDb();
   const message = (error instanceof Error ? error.message : String(error)).slice(0, 500);
-  await db.runAsync(
-    "UPDATE race_fetch_queue SET status=?,last_error=?,updated_at=CURRENT_TIMESTAMP WHERE url=?",
-    attempts >= 3 ? "FAILED" : "RETRY", message, url,
-  );
+  await withLiveDbWrite(async (db) => {
+    await db.runAsync(
+      "UPDATE race_fetch_queue SET status=?,last_error=?,updated_at=CURRENT_TIMESTAMP WHERE url=?",
+      attempts >= 3 ? "FAILED" : "RETRY", message, url,
+    );
+  });
 }
 
 export async function getRaceFetchStats() {
@@ -189,8 +193,7 @@ export async function findRaceFetchUrl(raceDate: string, venue: string, raceNo: 
 }
 
 export async function finishRaceFetchRun(state: RaceFetchRunState, error?: string | null) {
-  const db = await getLiveDb();
-  await db.withTransactionAsync(async () => {
+  await withLiveDbTransaction(async (db) => {
     await db.runAsync(
       "INSERT INTO meta(key,value) VALUES('race_fetch_state',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
       state,
