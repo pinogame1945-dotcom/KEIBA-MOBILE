@@ -224,37 +224,48 @@ function raceSelect() {
     direction,weather,track_condition AS trackCondition,source_url AS sourceUrl,fetched_at AS fetchedAt,status`;
 }
 
-export async function listOfficialRacesForDates(dates: string[]) {
+async function listStoredRacesForDates(dates: string[]) {
   if (!dates.length) return [] as JraRace[];
   const db = await getLiveDb();
   const placeholders = dates.map(() => "?").join(",");
   return db.getAllAsync<JraRace>(
-    `SELECT ${raceSelect()} FROM races WHERE race_date IN (${placeholders}) AND status='OFFICIAL'
+    `SELECT ${raceSelect()} FROM races WHERE race_date IN (${placeholders})
      ORDER BY race_date,venue,race_no`,
     ...dates,
   );
 }
 
+export async function listOfficialRacesForDates(dates: string[]) {
+  return (await listStoredRacesForDates(dates)).filter((race) => race.status === "OFFICIAL");
+}
+
+function mergeScheduledWithStored(schedule: JraRace, stored: JraRace | undefined) {
+  if (!stored) return schedule;
+  if (stored.status === "OFFICIAL") return stored;
+  return {
+    ...schedule,
+    canonicalRaceId: stored.canonicalRaceId ?? schedule.canonicalRaceId,
+    raceName: stored.raceName ?? schedule.raceName,
+    raceClass: stored.raceClass ?? schedule.raceClass,
+    weather: stored.weather ?? schedule.weather,
+    trackCondition: stored.trackCondition ?? schedule.trackCondition,
+  } satisfies JraRace;
+}
+
 export async function listRacesForDates(dates: string[]) {
   if (!dates.length) return [] as JraRace[];
-  const [target, official] = await Promise.all([
+  const [target, stored] = await Promise.all([
     getScheduleTarget(),
-    listOfficialRacesForDates(dates),
+    listStoredRacesForDates(dates),
   ]);
   const scheduled = scheduledDisplayRaces(target, dates);
-  if (!scheduled.length) {
-    const db = await getLiveDb();
-    const placeholders = dates.map(() => "?").join(",");
-    return db.getAllAsync<JraRace>(
-      `SELECT ${raceSelect()} FROM races WHERE race_date IN (${placeholders}) ORDER BY race_date,venue,race_no`,
-      ...dates,
-    );
-  }
-  const byKey = new Map(official.map((race) => [race.raceKey, race]));
+  if (!scheduled.length) return stored;
+
+  const byKey = new Map(stored.map((race) => [race.raceKey, race]));
   const scheduledKeys = new Set(scheduled.map((race) => race.raceKey));
   return scheduled
-    .map((race) => byKey.get(race.raceKey) ?? race)
-    .concat(official.filter((race) => !scheduledKeys.has(race.raceKey)))
+    .map((race) => mergeScheduledWithStored(race, byKey.get(race.raceKey)))
+    .concat(stored.filter((race) => !scheduledKeys.has(race.raceKey)))
     .sort((a,b) => a.raceDate.localeCompare(b.raceDate) || a.venue.localeCompare(b.venue,"ja") || a.raceNo - b.raceNo);
 }
 
@@ -291,7 +302,7 @@ export async function getRace(raceKey: string) {
     for (const meeting of target.meetings) {
       for (const race of meeting.races) {
         if (scheduleRaceKey(race.raceDate,race.venue,race.raceNo) === raceKey) {
-          return scheduleRaceAsDisplay(meeting,race,target.fetchedAt);
+          return mergeScheduledWithStored(scheduleRaceAsDisplay(meeting,race,target.fetchedAt), stored ?? undefined);
         }
       }
     }
