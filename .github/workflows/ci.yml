@@ -27,6 +27,12 @@ jobs:
         run: npm run live-data:contract
       - name: LIVE UI contract
         run: npm run live-ui:contract
+      - name: Reschedule contract
+        run: npm run reschedule:contract
+      - name: Reschedule runtime regression
+        run: npm run smoke:reschedule
+      - name: JRA schedule disruption regression
+        run: npm run smoke:jra:schedule-disruption
       - name: JRA entry runtime regression
         run: npm run smoke:jra:entry
       - name: JRA venue runtime regression
