@@ -131,6 +131,15 @@ assert.ok(
   "published results must still trigger odds recovery even when the JRA final marker is not detected",
 );
 
+assert.ok(
+  parser.includes("mergeConditions(race,meta,liveMeta,introMeta,raceHeadMeta,pageText)"),
+  "netkeiba result conditions must merge split metadata blocks instead of trusting one container",
+);
+assert.ok(
+  sync.includes("!completeness.resultReady||!completeness.conditionsComplete"),
+  "warming a completed race must repair missing weather/track conditions immediately",
+);
+
 console.log("LIVE data contract: PASS");
 
 const liveDb = readFileSync(new URL("../src/storage/liveDb.ts", import.meta.url), "utf8");
