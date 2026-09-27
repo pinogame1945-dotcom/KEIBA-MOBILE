@@ -10,6 +10,8 @@ import {
 } from "../repositories/liveRepository";
 
 const RESULT_SETTLE_DELAY_MS = 15 * 60 * 1000;
+const NETKEIBA_RESULT_PARSER_VERSION = 1;
+const JRA_RESULT_PARSER_VERSION = 1;
 const resultRefreshes = new Map<string, Promise<ReturnType<typeof parseNetkeibaRaceResultPage>>>();
 
 export async function loadRaceResult(raceKey: string) {
@@ -37,7 +39,7 @@ async function fetchNetkeibaResult(race: JraRace) {
   for (const url of resultSourceUrls(race)) {
     try {
       const html = await fetchNetkeibaHtml(url);
-      return parseNetkeibaRaceResultPage(html, race);
+      return { parsed:parseNetkeibaRaceResultPage(html, race), sourceUrl:url };
     } catch (error) {
       lastError = error;
       const message = error instanceof Error ? error.message : String(error);
@@ -94,7 +96,8 @@ async function refreshOfficialRaceResultImpl(race: JraRace) {
   let primaryError: unknown = null;
   if (race.canonicalRaceId) {
     try {
-      const parsed = await fetchNetkeibaResult(race);
+      const netkeiba = await fetchNetkeibaResult(race);
+      const parsed = netkeiba.parsed;
       let conditions = parsed.conditions;
 
       // A valid finish table is not enough to call the result layer complete.
@@ -109,7 +112,13 @@ async function refreshOfficialRaceResultImpl(race: JraRace) {
         }
       }
 
-      await saveOfficialRaceResult(race, parsed.results, parsed.payouts, conditions);
+      await saveOfficialRaceResult(
+        race,parsed.results,parsed.payouts,conditions,{
+          source:"NETKEIBA",
+          sourceUrl:netkeiba.sourceUrl,
+          parserVersion:NETKEIBA_RESULT_PARSER_VERSION,
+        },
+      );
       return { ...parsed, conditions };
     } catch (error) {
       primaryError = error;
@@ -119,7 +128,13 @@ async function refreshOfficialRaceResultImpl(race: JraRace) {
 
   try {
     const parsed = await fetchJraResultFallback(race);
-    await saveOfficialRaceResult(race, parsed.results, parsed.payouts, parsed.conditions);
+    await saveOfficialRaceResult(
+      race,parsed.results,parsed.payouts,parsed.conditions,{
+        source:"JRA",
+        sourceUrl:race.sourceUrl,
+        parserVersion:JRA_RESULT_PARSER_VERSION,
+      },
+    );
     return parsed;
   } catch (fallbackError) {
     const primary = primaryError instanceof Error ? primaryError.message : primaryError ? String(primaryError) : null;
