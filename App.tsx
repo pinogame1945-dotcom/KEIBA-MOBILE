@@ -1,14 +1,17 @@
 import { useEffect, useState } from "react";
-import { AppState } from "react-native";
+import { AppState, StyleSheet, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import { BottomNav } from "./src/components/BottomNav";
 import { HomeScreen } from "./src/screens/HomeScreen";
-import { TodayRacesScreen } from "./src/screens/TodayRacesScreen";
+import { RaceCardScreen } from "./src/screens/RaceCardScreen";
+import { WeekRacesScreen } from "./src/screens/WeekRacesScreen";
 import { refreshDueRaceStates } from "./src/services/raceRefreshService";
 
-type Route = "HOME" | "TODAY";
+type Route = "HOME" | "RACES";
 
 export default function App() {
   const [route, setRoute] = useState<Route>("HOME");
+  const [selectedRaceKey, setSelectedRaceKey] = useState<string | null>(null);
 
   useEffect(() => {
     const refreshDue = () => { void refreshDueRaceStates().catch(() => undefined); };
@@ -23,11 +26,40 @@ export default function App() {
     };
   }, []);
 
+  const openHome = () => {
+    setSelectedRaceKey(null);
+    setRoute("HOME");
+  };
+
+  const openWeek = () => {
+    setSelectedRaceKey(null);
+    setRoute("RACES");
+  };
+
+  const openRace = (raceKey: string) => {
+    setRoute("RACES");
+    setSelectedRaceKey(raceKey);
+  };
+
   return (
     <SafeAreaProvider>
-      {route === "HOME"
-        ? <HomeScreen onOpenToday={() => setRoute("TODAY")} />
-        : <TodayRacesScreen onBack={() => setRoute("HOME")} />}
+      <View style={styles.root}>
+        <View style={styles.content}>
+          {selectedRaceKey ? (
+            <RaceCardScreen raceKey={selectedRaceKey} onOpenWeek={openWeek} onOpenRace={openRace} />
+          ) : route === "HOME" ? (
+            <HomeScreen onOpenWeek={openWeek} onOpenRace={openRace} />
+          ) : (
+            <WeekRacesScreen onOpenRace={openRace} />
+          )}
+        </View>
+        <BottomNav active={route} onHome={openHome} onRaces={openWeek} />
+      </View>
     </SafeAreaProvider>
   );
 }
+
+const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: "#f4f6f8" },
+  content: { flex: 1 },
+});
