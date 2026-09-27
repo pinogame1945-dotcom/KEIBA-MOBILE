@@ -5,9 +5,7 @@ import {
   saveOddsActionCache,saveOddsSnapshotRows,
 } from "../../repositories/liveRepository";
 import { parseJraRaceIdentity } from "./raceHeaderParser";
-import {
-  bracketQuinellaOffered,ODDS_FINAL_DELAY_MS,raceStartEpoch,
-} from "./oddsAvailability";
+import { bracketQuinellaOffered,raceStartEpoch } from "./oddsAvailability";
 import { parseCombinationRows,parseWinPlaceRows } from "./oddsParser";
 import type { JraRace as JraWeekRace } from "../../domain/live";
 import { isJraFinalOddsHtml } from "./oddsFinalParser";
@@ -244,7 +242,12 @@ export function refreshAllRaceOdds(
   checkpointOverride?:string|null,
 ){
   const existing=raceRefreshes.get(race.raceKey);
-  if(existing)return existing;
+  if(existing){
+    if(checkpointOverride==="FINAL"){
+      return existing.then(()=>refreshAllRaceOdds(race,initialRaceHtml,checkpointOverride));
+    }
+    return existing;
+  }
   const job=refreshAllRaceOddsImpl(race,initialRaceHtml,checkpointOverride)
     .finally(()=>{raceRefreshes.delete(race.raceKey);});
   raceRefreshes.set(race.raceKey,job);
