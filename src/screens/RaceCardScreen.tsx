@@ -8,7 +8,7 @@ import type {
 } from "../domain/live";
 import { raceStartEpoch } from "../data/jra/oddsAvailability";
 import {
-  getRace, getRacePayouts, getRaceResults, getVenueConditionSnapshot, getWeekEntries, listRacesForDates,
+  getRace, getRacePayouts, getRaceResults, getVenueConditionSnapshot, getWeekEntries, listRacesForDates, localTodayIso,
 } from "../repositories/liveRepository";
 import { refreshRaceState } from "../services/raceRefreshService";
 import {
@@ -337,7 +337,7 @@ export function RaceCardScreen({
     } catch (e) {
       cardError = e;
     }
-    if (race.raceDate === new Date().toLocaleDateString("sv-SE")) {
+    if (race.raceDate === localTodayIso()) {
       await refreshTodayVenueConditions(true).catch(() => undefined);
     }
     await load().catch(() => undefined);
@@ -708,7 +708,7 @@ export function RaceCardScreen({
             <View style={styles.infoRow}><Text style={styles.infoKey}>馬場</Text><Text style={styles.infoValue}>{displayTrack ?? conditionMissingText}</Text></View>
             <View style={styles.infoRow}><Text style={styles.infoKey}>出走</Text><Text style={styles.infoValue}>{entries.filter((entry) => entry.entryStatus === "ACTIVE").length || "-"}頭</Text></View>
             <TouchableOpacity style={styles.cardRefresh} onPress={() => void refreshCard()} disabled={busy != null}>
-              <Text style={styles.cardRefreshText}>{busy === "race" ? "更新中" : race.raceDate === new Date().toLocaleDateString("sv-SE") ? "出馬表・現在馬場を更新 ↻" : "出馬表を更新 ↻"}</Text>
+              <Text style={styles.cardRefreshText}>{busy === "race" ? "更新中" : race.raceDate === localTodayIso() ? "出馬表・現在馬場を更新 ↻" : "出馬表を更新 ↻"}</Text>
             </TouchableOpacity>
           </View>
         ) : null}
