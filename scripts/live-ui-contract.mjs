@@ -47,4 +47,34 @@ assert.ok(
   "race-to-race navigation must replace the route while preserving the parent screen",
 );
 
+
+for (const token of [
+  "listRacingWeekRaces",
+  "meetingSwitcherOpen",
+  "meetingSwitchOptions",
+  'candidate.scheduleStatus !== "ACTIVE"',
+  'candidate.raceStatus === "CANCELLED"',
+  'candidate.raceStatus === "ABANDONED"',
+  "candidate.raceNo === race.raceNo",
+  "meetingSwitcherGrid",
+  'flexWrap: "wrap"',
+  "setMeetingSwitcherOpen(false)",
+]) {
+  assert.ok(race.includes(token), "race meeting switcher contract missing: " + token);
+}
+assert.ok(
+  !race.includes('style={styles.raceNavCenter} onPress={onOpenWeek}'),
+  "center race navigation must open the meeting switcher instead of returning to the week list",
+);
+assert.ok(
+  race.includes('if (meetingSwitcherOpen)') &&
+  race.includes('setMeetingSwitcherOpen(false);') &&
+  race.includes('BackHandler.addEventListener'),
+  "back must close the meeting switcher before leaving the race",
+);
+assert.ok(
+  app.includes('if (last?.type === "RACE") return [...prev.slice(0, -1), next]'),
+  "meeting switching must replace the current race route instead of growing navigation history",
+);
+
 console.log("LIVE UI contract: PASS");
