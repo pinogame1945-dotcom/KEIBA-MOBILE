@@ -140,6 +140,19 @@ assert.ok(
   "warming a completed race must repair missing weather/track conditions immediately",
 );
 
+
+assert.ok(
+  result.includes("if (!resultConditionsComplete(race, conditions))") &&
+  result.includes("const jra = await fetchJraResultFallback(race)") &&
+  result.includes("mergeOfficialRaceConditions(conditions, jra.conditions)"),
+  "a successful netkeiba result with missing conditions must still supplement weather/going from JRA",
+);
+assert.ok(
+  sync.includes('race.canonicalRaceId||race.sourceUrl.includes("/JRADB/accessD.html")') &&
+  !sync.includes(".filter(race=>race.canonicalRaceId)"),
+  "result repair must accept JRA-backed races even when canonicalRaceId is unavailable",
+);
+
 console.log("LIVE data contract: PASS");
 
 const liveDb = readFileSync(new URL("../src/storage/liveDb.ts", import.meta.url), "utf8");
