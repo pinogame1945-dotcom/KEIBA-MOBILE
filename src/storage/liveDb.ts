@@ -31,7 +31,6 @@ CREATE TABLE IF NOT EXISTS races (
   status TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_races_date_venue ON races(race_date, venue, race_no);
-CREATE INDEX IF NOT EXISTS idx_races_canonical_schedule ON races(canonical_race_id, schedule_status, race_date);
 
 CREATE TABLE IF NOT EXISTS entries (
   race_key TEXT NOT NULL,

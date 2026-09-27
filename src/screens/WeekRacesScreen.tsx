@@ -89,7 +89,9 @@ export function WeekRacesScreen({
 
   useEffect(() => {
     if (!active) return;
-    void load();
+    void load().catch((e) => {
+      setError(e instanceof Error ? e.message : String(e));
+    });
   }, [active, cacheRevision, load]);
 
   const actualDates = useMemo(
