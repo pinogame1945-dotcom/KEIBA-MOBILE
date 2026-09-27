@@ -27,7 +27,7 @@ export async function refreshOfficialRaceResult(race: JraRace) {
     throw new Error("JRA公式結果はまだ公開されていない");
   }
   const resultHtml = await fetchJraPostHtml(action.path, action.cname);
-  const parsed = parseJraRaceResultPage(resultHtml, race.raceKey);
-  await saveOfficialRaceResult(race.raceKey, parsed.results, parsed.payouts);
+  const parsed = parseJraRaceResultPage(resultHtml, race);
+  await saveOfficialRaceResult(race, parsed.results, parsed.payouts, parsed.conditions);
   return parsed;
 }
