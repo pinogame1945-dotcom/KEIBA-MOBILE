@@ -66,7 +66,7 @@ function directCells($: CheerioAPI, row: any, selector: "td" | "th,td" = "td") {
   const children = $(row).children();
   return selector === "td" ? children.filter("td") : children.filter("th,td");
 }
-function splitCellLines($: CheerioAPI, cell: any) {
+function splitCellLines($: CheerioAPI, cell: any): string[] {
   const lis = cell.find("li");
   if (lis.length) {
     const lines: string[] = [];
@@ -78,8 +78,9 @@ function splitCellLines($: CheerioAPI, cell: any) {
   }
   const clone = cell.clone();
   clone.find("br").each((_: number, br: any) => { $(br).replaceWith("\n"); });
-  const lines = clone.text().split(/\n+/).map(clean).filter(Boolean);
-  return lines.length ? lines : [clean(clone.text())].filter(Boolean);
+  const raw = String(clone.text());
+  const lines: string[] = raw.split(/\n+/).map((value: string) => clean(value)).filter(Boolean);
+  return lines.length ? lines : [clean(raw)].filter(Boolean);
 }
 function payoutArity(type: OddsBetType) {
   if (["BRACKET_QUINELLA","QUINELLA","WIDE","EXACTA"].includes(type)) return 2;
@@ -224,21 +225,21 @@ export function parseNetkeibaRaceResultPage(html: string, race: JraRace) {
     if (!betType) return;
 
     const combinations = normalizePayoutCombinations(betType, splitCellLines($, cells.eq(1)));
-    const amounts = splitCellLines($, cells.eq(2)).map((value) => intOrNull(value));
-    const popularities = cells.length >= 4
-      ? splitCellLines($, cells.eq(3)).map((value) => intOrNull(value))
+    const amounts: Array<number | null> = splitCellLines($, cells.eq(2)).map((value: string) => intOrNull(value));
+    const popularities: Array<number | null> = cells.length >= 4
+      ? splitCellLines($, cells.eq(3)).map((value: string) => intOrNull(value))
       : [];
     const count = Math.max(combinations.length, amounts.length, popularities.length, 1);
     for (let i = 0; i < count; i += 1) {
-      const selection = valueAt(combinations, i);
-      const payoutYen = valueAt(amounts, i);
+      const selection = valueAt<string>(combinations, i);
+      const payoutYen = valueAt<number | null>(amounts, i);
       if (!selection || payoutYen == null) continue;
       payouts.push({
         raceKey: race.raceKey,
         betType,
         selection,
         payoutYen,
-        popularity: valueAt(popularities, i),
+        popularity: valueAt<number | null>(popularities, i),
       });
     }
   });
