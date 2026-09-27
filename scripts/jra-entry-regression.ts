@@ -40,7 +40,7 @@ const cancelledRows=Array.from({length:10},(_,i)=>{
   const gate=inferGateFromHorseNo(no,10);
   const horseNoCell=no===6?"<td>取消</td>":`<td>${no}</td>`;
   const horseStatus=no===6?" 取消":"";
-  return `<tr><td><img alt="枠${gate}"></td>${horseNoCell}<td><a href="/horse/c${no}">取消テスト${no}</a>${horseStatus}</td><td>牡3 / 鹿 55 kg</td><td><a href="/jockey/c${no}">騎手${no}</a></td><td><a href="/trainer/c${no}">調教師${no}</a></td></tr>`;
+  return `<tr><td><img alt="枠${gate}"></td>${horseNoCell}<td><a href="/horse/c${no}">検証馬${no}</a>${horseStatus}</td><td>牡3 / 鹿 55 kg</td><td><a href="/jockey/c${no}">騎手${no}</a></td><td><a href="/trainer/c${no}">調教師${no}</a></td></tr>`;
 }).join("");
 
 const cancelledHtml=`
@@ -56,10 +56,10 @@ assert.equal(cancelled[5].gate,6,"cancelled row must retain or safely infer its 
 assert.match(cancelled[5].rowText,/取消/);
 
 const activeMissingHtml=cancelledHtml
-  .replace("<td>4</td><td><a href=\"/horse/c4\">取消テスト4</a>", "<td></td><td><a href=\"/horse/c4\">取消テスト4</a>");
+  .replace("<td>4</td><td><a href=\"/horse/c4\">検証馬4</a>", "<td></td><td><a href=\"/horse/c4\">検証馬4</a>");
 const activeMissing=extractOfficialEntryRows(activeMissingHtml);
 assert.equal(
-  activeMissing.find(row=>row.horseName==="取消テスト4")?.horseNo,
+  activeMissing.find(row=>row.horseName==="検証馬4")?.horseNo,
   null,
   "active row without an explicit number must never be guessed",
 );
