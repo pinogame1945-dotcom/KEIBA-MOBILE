@@ -1,5 +1,5 @@
 import type {
-  JraEntry, JraRace, JraRaceCard, OddsBetType, OddsRow, RaceNotice, ScheduleMeeting,
+  JraEntry, JraPayout, JraRace, JraRaceCard, JraRaceResult, OddsBetType, OddsRow, RaceNotice, ScheduleMeeting,
 } from "../domain/live";
 import { getLiveDb } from "../storage/liveDb";
 
@@ -170,6 +170,35 @@ export async function listTodayRaces() {
     localTodayIso(),
   );
 }
+
+function shiftLocalIso(iso: string, days: number) {
+  const [y,m,d] = iso.split("-").map(Number);
+  const date = new Date(y, (m || 1) - 1, d || 1);
+  date.setDate(date.getDate() + days);
+  return localTodayIso(date.getTime());
+}
+
+export function racingWeekCandidateDates(nowMs = Date.now()) {
+  const now = new Date(nowMs);
+  const day = now.getDay();
+  const deltaToSaturday = day === 6 ? 0 : day === 0 ? -1 : day === 1 ? -2 : 6 - day;
+  const saturday = shiftLocalIso(localTodayIso(nowMs), deltaToSaturday);
+  return [saturday, shiftLocalIso(saturday, 1), shiftLocalIso(saturday, 2)];
+}
+
+export async function listRacesForDates(dates: string[]) {
+  if (!dates.length) return [] as JraRace[];
+  const db = await getLiveDb();
+  const placeholders = dates.map(() => "?").join(",");
+  return db.getAllAsync<JraRace>(
+    `SELECT ${raceSelect()} FROM races WHERE race_date IN (${placeholders}) ORDER BY race_date,venue,race_no`,
+    ...dates,
+  );
+}
+
+export async function listRacingWeekRaces(nowMs = Date.now()) {
+  return listRacesForDates(racingWeekCandidateDates(nowMs));
+}
 export async function getRace(raceKey: string) {
   const db = await getLiveDb();
   return db.getFirstAsync<JraRace>(`SELECT ${raceSelect()} FROM races WHERE race_key=?`, raceKey);
@@ -290,4 +319,74 @@ export async function getOddsAvailability(raceKey: string) {
      WHERE race_key=? GROUP BY bet_type`,
     raceKey,
   );
+}
+
+
+export async function getRaceResults(raceKey: string) {
+  const db = await getLiveDb();
+  return db.getAllAsync<JraRaceResult>(
+    `SELECT race_key AS raceKey,finish_position AS finishPosition,finish_raw AS finishRaw,
+      horse_no AS horseNo,horse_name AS horseName,finish_time AS finishTime,margin,last_3f AS last3f,
+      popularity,result_status AS resultStatus
+     FROM race_results WHERE race_key=?
+     ORDER BY CASE WHEN finish_position IS NULL THEN 999 ELSE finish_position END,horse_no`,
+    raceKey,
+  );
+}
+
+export async function getRacePayouts(raceKey: string) {
+  const db = await getLiveDb();
+  return db.getAllAsync<JraPayout>(
+    `SELECT race_key AS raceKey,bet_type AS betType,selection,payout_yen AS payoutYen,popularity
+     FROM payouts WHERE race_key=?
+     ORDER BY CASE bet_type
+       WHEN 'WIN' THEN 1 WHEN 'PLACE' THEN 2 WHEN 'BRACKET_QUINELLA' THEN 3
+       WHEN 'QUINELLA' THEN 4 WHEN 'WIDE' THEN 5 WHEN 'EXACTA' THEN 6
+       WHEN 'TRIO' THEN 7 WHEN 'TRIFECTA' THEN 8 ELSE 99 END,selection`,
+    raceKey,
+  );
+}
+
+export async function listRaceKeysWithResults(dates: string[]) {
+  if (!dates.length) return [] as string[];
+  const db = await getLiveDb();
+  const placeholders = dates.map(() => "?").join(",");
+  const rows = await db.getAllAsync<{ raceKey: string }>(
+    `SELECT DISTINCT rr.race_key AS raceKey
+     FROM race_results rr
+     INNER JOIN races r ON r.race_key=rr.race_key
+     WHERE r.race_date IN (${placeholders})`,
+    ...dates,
+  );
+  return rows.map((row) => row.raceKey);
+}
+
+export async function saveOfficialRaceResult(
+  raceKey: string,
+  results: JraRaceResult[],
+  payouts: JraPayout[],
+) {
+  if (!results.length) throw new Error("公式結果が空のため保存しない");
+  const db = await getLiveDb();
+  const observedAt = new Date().toISOString();
+  await db.withTransactionAsync(async () => {
+    await db.runAsync("DELETE FROM race_results WHERE race_key=?", raceKey);
+    await db.runAsync("DELETE FROM payouts WHERE race_key=?", raceKey);
+    for (const row of results) {
+      await db.runAsync(
+        `INSERT INTO race_results(
+          race_key,finish_position,finish_raw,horse_no,horse_name,finish_time,margin,last_3f,popularity,result_status,observed_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+        raceKey,row.finishPosition,row.finishRaw,row.horseNo,row.horseName,row.finishTime,row.margin,row.last3f,
+        row.popularity,row.resultStatus,observedAt,
+      );
+    }
+    for (const row of payouts) {
+      await db.runAsync(
+        `INSERT INTO payouts(race_key,bet_type,selection,payout_yen,popularity,observed_at)
+         VALUES(?,?,?,?,?,?)`,
+        raceKey,row.betType,row.selection,row.payoutYen,row.popularity,observedAt,
+      );
+    }
+  });
 }
