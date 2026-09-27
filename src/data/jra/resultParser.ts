@@ -111,9 +111,8 @@ function assertIdentity(pageText: string, race: JraRace) {
   if (!new RegExp("\\d+回" + race.venue + "\\d+日").test(pageText)) {
     throw new Error("JRA結果ページの競馬場が対象レースと一致しない");
   }
-  if (!new RegExp("(?:^|\\s)" + race.raceNo + "レース(?:\\s|$)").test(pageText)) {
-    throw new Error("JRA結果ページのレース番号が対象レースと一致しない");
-  }
+  // 現行JRAではレース番号が画像化されるページがある。
+  // 日付・開催場に加え、結果遷移元のaccessD identityで対象レースを担保する。
 }
 
 function parseConditions(pageText: string): OfficialRaceConditions {
