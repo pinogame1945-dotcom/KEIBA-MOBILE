@@ -52,6 +52,16 @@ assert.ok(
   "warm/sync paths must repair layers independently instead of full-week blocking",
 );
 assert.ok(
+  repository.includes("complete:resultCount>0&&payoutCount>0") &&
+  !repository.includes("complete:resultCount>0&&payoutCount>0&&conditionsComplete"),
+  "stored result settlement must not be held incomplete by missing venue conditions",
+);
+assert.ok(
+  sync.includes("ODDS_FINAL_DELAY_MS") &&
+  screen.includes("ODDS_FINAL_DELAY_MS"),
+  "final odds must have automatic post-race refresh paths",
+);
+assert.ok(
   !repository.includes("saveScheduleMeetings") &&
   !repository.includes("applyVenueConditions"),
   "schedule rows and current venue conditions must not overwrite formal/final race records",
