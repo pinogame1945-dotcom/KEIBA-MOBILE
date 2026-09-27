@@ -462,7 +462,8 @@ export async function listStoredRaceWeeks():Promise<StoredRaceWeek[]>{
          SELECT 1 FROM race_results rr WHERE rr.race_key=r.race_key
        ) THEN 1 ELSE 0 END) AS resultCount
      FROM races r
-     WHERE r.status='OFFICIAL' OR r.race_status='COMPLETED'
+     WHERE r.schedule_status='ACTIVE'
+       AND (r.status='OFFICIAL' OR r.race_status='COMPLETED')
      GROUP BY r.race_date
      ORDER BY r.race_date`,
   );
