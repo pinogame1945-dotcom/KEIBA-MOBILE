@@ -132,7 +132,7 @@ export default function App() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#f4f6f8" },
   content: { flex: 1, position: "relative" },
-  screen: { ...StyleSheet.absoluteFillObject },
+  screen: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0 },
   activeScreen: { opacity: 1, zIndex: 1 },
   hidden: { opacity: 0, zIndex: 0 },
 });
