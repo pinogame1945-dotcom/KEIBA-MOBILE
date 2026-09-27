@@ -39,6 +39,8 @@ jobs:
         run: npm run smoke:jra:venue
       - name: JRA final odds runtime regression
         run: npm run smoke:jra:final-odds
+      - name: JRA result condition regression
+        run: npm run smoke:jra:result-condition
       - name: netkeiba result condition regression
         run: npm run smoke:netkeiba:result-condition
       - name: Typecheck

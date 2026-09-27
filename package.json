@@ -16,6 +16,7 @@
     "smoke:jra:entry": "node --experimental-strip-types scripts/jra-entry-regression.ts",
     "smoke:jra:venue": "node --experimental-strip-types scripts/jra-venue-regression.ts",
     "smoke:jra:final-odds": "node --experimental-strip-types scripts/jra-final-odds-regression.ts",
+    "smoke:jra:result-condition": "node --experimental-strip-types scripts/jra-result-condition-regression.ts",
     "smoke:netkeiba:result-condition": "node --experimental-strip-types scripts/netkeiba-result-condition-regression.ts",
     "expo:config:smoke": "expo config --type public --json > /dev/null",
     "android:smoke": "expo export --platform android --output-dir dist-android-smoke --clear",

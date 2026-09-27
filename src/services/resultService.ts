@@ -4,7 +4,10 @@ import { raceStartEpoch } from "../data/jra/oddsAvailability";
 import { discoverRaceResultAction, parseJraRaceResultPage } from "../data/jra/resultParser";
 import { fetchNetkeibaHtml } from "../data/netkeiba/http";
 import { parseNetkeibaRaceResultPage } from "../data/netkeiba/resultParser";
-import { getRacePayouts, getRaceResults, saveOfficialRaceResult } from "../repositories/liveRepository";
+import {
+  getRacePayouts,getRaceResults,saveOfficialRaceResult,
+  type OfficialRaceConditions,
+} from "../repositories/liveRepository";
 
 const RESULT_SETTLE_DELAY_MS = 15 * 60 * 1000;
 const resultRefreshes = new Map<string, Promise<ReturnType<typeof parseNetkeibaRaceResultPage>>>();
@@ -44,6 +47,29 @@ async function fetchNetkeibaResult(race: JraRace) {
   throw lastError instanceof Error ? lastError : new Error("netkeiba確定結果を取得できない");
 }
 
+function relevantTrackCondition(race:JraRace,conditions:OfficialRaceConditions){
+  if(race.discipline==="OBSTACLE"||race.surface==="MIXED"){
+    return conditions.turfCondition??conditions.dirtCondition;
+  }
+  return race.surface==="DIRT"?conditions.dirtCondition:conditions.turfCondition;
+}
+
+export function resultConditionsComplete(race:JraRace,conditions:OfficialRaceConditions){
+  return Boolean(conditions.weather&&relevantTrackCondition(race,conditions));
+}
+
+export function mergeOfficialRaceConditions(
+  primary:OfficialRaceConditions,
+  jra:OfficialRaceConditions,
+):OfficialRaceConditions{
+  // JRA is authoritative for race-day weather/going when available.
+  return {
+    weather:jra.weather??primary.weather,
+    turfCondition:jra.turfCondition??primary.turfCondition,
+    dirtCondition:jra.dirtCondition??primary.dirtCondition,
+  };
+}
+
 async function fetchJraResultFallback(race: JraRace) {
   if (!race.sourceUrl.includes("/JRADB/accessD.html")) {
     throw new Error("JRA正式出馬表URLが未取得");
@@ -69,8 +95,22 @@ async function refreshOfficialRaceResultImpl(race: JraRace) {
   if (race.canonicalRaceId) {
     try {
       const parsed = await fetchNetkeibaResult(race);
-      await saveOfficialRaceResult(race, parsed.results, parsed.payouts, parsed.conditions);
-      return parsed;
+      let conditions = parsed.conditions;
+
+      // A valid finish table is not enough to call the result layer complete.
+      // If netkeiba omitted weather/going, supplement those fields from JRA
+      // instead of returning success with track_condition=NULL forever.
+      if (!resultConditionsComplete(race, conditions)) {
+        try {
+          const jra = await fetchJraResultFallback(race);
+          conditions = mergeOfficialRaceConditions(conditions, jra.conditions);
+        } catch (conditionError) {
+          console.warn("JRA result condition supplement failed", race.raceKey, conditionError);
+        }
+      }
+
+      await saveOfficialRaceResult(race, parsed.results, parsed.payouts, conditions);
+      return { ...parsed, conditions };
     } catch (error) {
       primaryError = error;
       console.warn("netkeiba result refresh failed; trying JRA fallback", race.raceKey, error);

@@ -403,6 +403,16 @@ export function RaceCardScreen({
     );
   }, [race, weekRaces]);
 
+  const meetingSwitchRows = useMemo(() => {
+    const rows = new Map<string, typeof meetingSwitchOptions>();
+    for (const option of meetingSwitchOptions) {
+      const row = rows.get(option.raceDate) ?? [];
+      row.push(option);
+      rows.set(option.raceDate, row);
+    }
+    return [...rows.entries()].map(([raceDate, options]) => ({ raceDate, options }));
+  }, [meetingSwitchOptions]);
+
   const switchMeeting = useCallback((target: JraRace | null, current: boolean) => {
     setMeetingSwitcherOpen(false);
     if (!target || current || target.raceKey === raceKey) return;
@@ -582,42 +592,43 @@ export function RaceCardScreen({
 
         {meetingSwitcherOpen ? (
           <View style={styles.meetingSwitcher}>
-            <View style={styles.meetingSwitcherHeader}>
-              <Text style={styles.meetingSwitcherTitle}>同じ {race.raceNo}R へ切替</Text>
-              <Text style={styles.meetingSwitcherHint}>日付・競馬場を1タップで選択</Text>
-            </View>
-            <View style={styles.meetingSwitcherGrid}>
-              {meetingSwitchOptions.map((option) => {
-                const disabled = !option.target;
-                return (
-                  <TouchableOpacity
-                    key={option.key}
-                    disabled={disabled}
-                    style={[
-                      styles.meetingSwitchButton,
-                      option.current && styles.meetingSwitchButtonCurrent,
-                      disabled && styles.disabled,
-                    ]}
-                    onPress={() => switchMeeting(option.target, option.current)}
-                  >
-                    <Text style={[
-                      styles.meetingSwitchDate,
-                      option.current && styles.meetingSwitchTextCurrent,
-                    ]}>{meetingDateLabel(option.raceDate)}</Text>
-                    <View style={styles.meetingSwitchVenueRow}>
-                      <Text style={[
-                        styles.meetingSwitchVenue,
-                        option.current && styles.meetingSwitchTextCurrent,
-                      ]}>{option.venue}</Text>
-                      {option.current ? (
-                        <Text style={styles.meetingSwitchCurrentBadge}>現在</Text>
-                      ) : null}
-                    </View>
-                    {disabled ? <Text style={styles.meetingSwitchMissing}>{race.raceNo}Rなし</Text> : null}
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+            {meetingSwitchRows.map((row) => (
+              <View key={row.raceDate} style={styles.meetingSwitchRow}>
+                <Text style={styles.meetingSwitchRowDate}>{meetingDateLabel(row.raceDate)}</Text>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  style={styles.meetingVenueScroller}
+                  contentContainerStyle={styles.meetingVenueChips}
+                >
+                  {row.options.map((option) => {
+                    const disabled = !option.target;
+                    return (
+                      <TouchableOpacity
+                        key={option.key}
+                        disabled={disabled}
+                        style={[
+                          styles.meetingSwitchChip,
+                          option.current && styles.meetingSwitchChipCurrent,
+                          disabled && styles.disabled,
+                        ]}
+                        onPress={() => switchMeeting(option.target, option.current)}
+                      >
+                        <Text style={[
+                          styles.meetingSwitchChipText,
+                          option.current && styles.meetingSwitchTextCurrent,
+                        ]}>{option.venue}</Text>
+                        {option.current ? (
+                          <Text style={styles.meetingSwitchCurrentBadge}>現在</Text>
+                        ) : disabled ? (
+                          <Text style={styles.meetingSwitchMissing}>{race.raceNo}Rなし</Text>
+                        ) : null}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            ))}
           </View>
         ) : null}
 
@@ -1000,26 +1011,24 @@ const styles = StyleSheet.create({
   raceNavCenter: { flex: 1, minHeight: 42, backgroundColor: "#111827", borderRadius: 12, alignItems: "center", justifyContent: "center" },
   raceNavCenterOpen: { borderBottomLeftRadius: 8, borderBottomRightRadius: 8 },
   raceNavCenterText: { color: "#fff", fontSize: 12, fontWeight: "900" },
-  meetingSwitcher: { backgroundColor: "#fff", borderRadius: 16, padding: 12, gap: 10 },
-  meetingSwitcherHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
-  meetingSwitcherTitle: { color: "#111827", fontSize: 13, fontWeight: "900" },
-  meetingSwitcherHint: { color: "#9ca3af", fontSize: 9, fontWeight: "800" },
-  meetingSwitcherGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  meetingSwitchButton: {
-    minWidth: "30%", flexGrow: 1, flexBasis: 96, minHeight: 62,
-    backgroundColor: "#eef2f7", borderRadius: 12, paddingHorizontal: 10, paddingVertical: 9,
-    justifyContent: "center",
+  meetingSwitcher: { backgroundColor: "#fff", borderRadius: 14, padding: 8, gap: 6 },
+  meetingSwitchRow: { minHeight: 36, flexDirection: "row", alignItems: "center", gap: 6 },
+  meetingSwitchRowDate: { width: 62, color: "#6b7280", fontSize: 10, fontWeight: "900" },
+  meetingVenueScroller: { flex: 1 },
+  meetingVenueChips: { flexGrow: 1, gap: 6, alignItems: "center" },
+  meetingSwitchChip: {
+    minWidth: 64, minHeight: 34, flexGrow: 1,
+    backgroundColor: "#eef2f7", borderRadius: 10, paddingHorizontal: 9,
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4,
   },
-  meetingSwitchButtonCurrent: { backgroundColor: "#111827" },
-  meetingSwitchDate: { color: "#6b7280", fontSize: 9, fontWeight: "800" },
-  meetingSwitchVenueRow: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 3 },
-  meetingSwitchVenue: { color: "#111827", fontSize: 14, fontWeight: "900" },
+  meetingSwitchChipCurrent: { backgroundColor: "#111827" },
+  meetingSwitchChipText: { color: "#111827", fontSize: 11, fontWeight: "900" },
   meetingSwitchTextCurrent: { color: "#fff" },
   meetingSwitchCurrentBadge: {
     backgroundColor: "#fff", color: "#111827", borderRadius: 999,
-    paddingHorizontal: 5, paddingVertical: 1, fontSize: 7, fontWeight: "900",
+    paddingHorizontal: 4, paddingVertical: 1, fontSize: 6, fontWeight: "900",
   },
-  meetingSwitchMissing: { color: "#9ca3af", fontSize: 8, fontWeight: "800", marginTop: 2 },
+  meetingSwitchMissing: { color: "#9ca3af", fontSize: 7, fontWeight: "800" },
   disabled: { opacity: 0.32 },
   raceTabs: { flexDirection: "row", gap: 6 },
   raceTab: { flex: 1, minHeight: 50, backgroundColor: "#e5e7eb", borderRadius: 13, alignItems: "center", justifyContent: "center" },
