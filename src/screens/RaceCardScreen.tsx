@@ -6,7 +6,7 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import type {
   JraEntry, JraPayout, JraRace, JraRaceResult, OddsBetType, OddsRow, VenueConditionSnapshot,
 } from "../domain/live";
-import { ODDS_FINAL_DELAY_MS, raceStartEpoch } from "../data/jra/oddsAvailability";
+import { raceStartEpoch } from "../data/jra/oddsAvailability";
 import {
   getRace, getRacePayouts, getRaceResults, getVenueConditionSnapshot, getWeekEntries, listRacesForDates, localTodayIso,
 } from "../repositories/liveRepository";
@@ -160,6 +160,7 @@ export function RaceCardScreen({
   const [availableTypes, setAvailableTypes] = useState<OddsBetType[]>([]);
   const [latestWinByNo, setLatestWinByNo] = useState<Map<number, number>>(() => new Map());
   const [latestObservedAt, setLatestObservedAt] = useState<string | null>(null);
+  const [finalOddsConfirmedAt, setFinalOddsConfirmedAt] = useState<string | null>(null);
   const [results, setResults] = useState<JraRaceResult[]>([]);
   const [payouts, setPayouts] = useState<JraPayout[]>([]);
   const [venueSnapshot, setVenueSnapshot] = useState<VenueConditionSnapshot | null>(null);
@@ -199,6 +200,7 @@ export function RaceCardScreen({
     setEntries(nextEntries);
     setAvailableTypes(oddsMeta.availableTypes);
     setLatestObservedAt(oddsMeta.latestObservedAt);
+    setFinalOddsConfirmedAt(oddsMeta.finalConfirmedAt);
     setLatestWinByNo(new Map(
       winOdds
         .filter((row): row is { horseNo: number; odds: number } => row.odds != null)
@@ -295,22 +297,19 @@ export function RaceCardScreen({
 
   useEffect(() => {
     if (!active || !race || race.status !== "OFFICIAL" || !entries.length || autoOddsStarted.current) return;
-    const start = raceStartEpoch(race);
+    if (finalOddsConfirmedAt) return;
     const now = Date.now();
     const latestMs = latestObservedAt ? Date.parse(latestObservedAt) : 0;
     const hasLatest = Number.isFinite(latestMs) && latestMs > 0;
-    const finalDue = start != null && now >= start + ODDS_FINAL_DELAY_MS;
-    if (start != null && start <= now && !finalDue) return;
-    if (finalDue && start != null) {
-      if (hasLatest && latestMs >= start + ODDS_FINAL_DELAY_MS) return;
-    } else if (hasLatest && now - latestMs < 5 * 60 * 1000) {
-      return;
-    }
+    if (hasLatest && now - latestMs < 5 * 60 * 1000) return;
+    // Scheduled post time is not an actual-start signal. refreshLatestOdds keeps
+    // LIVE collection alive until a result exists, then switches to a light
+    // JRA final-marker probe before the one final all-bet fetch.
     autoOddsStarted.current = true;
     void refreshLatestOdds(race, entries)
       .then(() => { onMutation?.(); return load(); })
       .catch(() => undefined);
-  }, [active, race, entries, latestObservedAt, load, onMutation]);
+  }, [active, race, entries, latestObservedAt, finalOddsConfirmedAt, load, onMutation]);
 
   useEffect(() => {
     if (!active || raceTab !== "RESULT" || !race || results.length || busy || autoResultRaceKey.current === race.raceKey) return;
@@ -654,14 +653,18 @@ export function RaceCardScreen({
 
             <View style={styles.oddsStatus}>
               <Text style={styles.oddsStatusText}>
-                最終取得 {formatClock(latestObservedAt)}{latestObservedAt ? "　" + freshnessText(latestObservedAt, nowMs) : ""}
+                {finalOddsConfirmedAt
+                  ? "✓ 最終オッズ　取得 " + formatClock(latestObservedAt)
+                  : "最終取得 " + formatClock(latestObservedAt) + (latestObservedAt ? "　" + freshnessText(latestObservedAt, nowMs) : "")}
               </Text>
               <TouchableOpacity
                 style={styles.oddsStatusButton}
                 onPress={() => void refreshOdds()}
-                disabled={busy != null || race.status !== "OFFICIAL"}
+                disabled={busy != null || race.status !== "OFFICIAL" || Boolean(finalOddsConfirmedAt)}
               >
-                <Text style={styles.oddsStatusButtonText}>{busy === "odds" ? "取得中" : "↻ 更新"}</Text>
+                <Text style={styles.oddsStatusButtonText}>
+                  {finalOddsConfirmedAt ? "✓ 確定" : busy === "odds" ? "取得中" : "↻ 更新"}
+                </Text>
               </TouchableOpacity>
             </View>
 
