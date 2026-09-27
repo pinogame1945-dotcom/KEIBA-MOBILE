@@ -1,77 +1,272 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View,
+  ActivityIndicator, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
-import type { JraEntry, JraRace, OddsBetType, OddsRow } from "../domain/live";
-import { getRace, getWeekEntries } from "../repositories/liveRepository";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import type {
+  JraEntry, JraPayout, JraRace, JraRaceResult, OddsBetType, OddsRow,
+} from "../domain/live";
+import { raceStartEpoch } from "../data/jra/oddsAvailability";
+import {
+  getRace, getRacePayouts, getRaceResults, getWeekEntries, listRacesForDates,
+} from "../repositories/liveRepository";
 import { refreshRaceState } from "../services/raceRefreshService";
 import { loadOdds, oddsBetTypeLabel, refreshLatestOdds } from "../services/oddsService";
+import { refreshOfficialRaceResult } from "../services/resultService";
 
 type Props = {
   raceKey: string;
-  onBack: () => void;
-  onRefreshAll: () => Promise<void>;
+  onOpenWeek: () => void;
+  onOpenRace: (raceKey: string) => void;
 };
 
-const TYPE_ORDER: OddsBetType[] = ["WIN","PLACE","BRACKET_QUINELLA","QUINELLA","WIDE","EXACTA","TRIO","TRIFECTA"];
+type RaceTab = "CARD" | "ODDS" | "INFO" | "RESULT";
+type SortMode = "HORSE_NO" | "POPULARITY";
+type OddsView = "NORMAL" | "HORSE";
+
+const TYPE_ORDER: OddsBetType[] = [
+  "WIN","PLACE","BRACKET_QUINELLA","QUINELLA","WIDE","EXACTA","TRIO","TRIFECTA",
+];
+const HORSE_RANK_TYPES: OddsBetType[] = [
+  "BRACKET_QUINELLA","QUINELLA","WIDE","EXACTA","TRIO","TRIFECTA",
+];
+
+const GATE_COLORS: Record<number, { bg: string; fg: string; border: string }> = {
+  1: { bg: "#ffffff", fg: "#111827", border: "#9ca3af" },
+  2: { bg: "#171717", fg: "#ffffff", border: "#171717" },
+  3: { bg: "#e53935", fg: "#ffffff", border: "#e53935" },
+  4: { bg: "#3157c8", fg: "#ffffff", border: "#3157c8" },
+  5: { bg: "#f4d03f", fg: "#111827", border: "#d4b21f" },
+  6: { bg: "#28965a", fg: "#ffffff", border: "#28965a" },
+  7: { bg: "#e68a2e", fg: "#ffffff", border: "#e68a2e" },
+  8: { bg: "#e990b5", fg: "#111827", border: "#d7709b" },
+};
 
 function formatSelection(row: OddsRow) {
   return [row.selection1, row.selection2, row.selection3].filter((v) => v != null).join("-");
 }
+
 function formatOdds(row: OddsRow) {
   if (row.odds != null) return row.odds.toFixed(1);
   if (row.oddsMin != null && row.oddsMax != null) return row.oddsMin.toFixed(1) + "〜" + row.oddsMax.toFixed(1);
   return "-";
 }
 
-export function RaceCardScreen({ raceKey, onBack, onRefreshAll }: Props) {
+function oddsSortValue(row: OddsRow) {
+  return row.odds ?? row.oddsMin ?? Number.POSITIVE_INFINITY;
+}
+
+function formatClock(iso: string | null) {
+  if (!iso) return "未取得";
+  const date = new Date(iso);
+  if (!Number.isFinite(date.getTime())) return "未取得";
+  return [date.getHours(), date.getMinutes(), date.getSeconds()]
+    .map((n) => String(n).padStart(2, "0")).join(":");
+}
+
+function freshnessText(iso: string | null, nowMs: number) {
+  if (!iso) return "";
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return "";
+  const seconds = Math.max(0, Math.floor((nowMs - ms) / 1000));
+  if (seconds < 60) return `約${seconds}秒前`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `約${minutes}分前`;
+  return `約${Math.floor(minutes / 60)}時間前`;
+}
+
+function raceState(race: JraRace, hasResult: boolean) {
+  if (hasResult) return "結果確定";
+  const start = raceStartEpoch(race);
+  if (start != null && start <= Date.now()) return "結果待ち";
+  return race.status === "OFFICIAL" ? "発走前" : "予定";
+}
+
+function resultStatusLabel(result: JraRaceResult) {
+  if (result.resultStatus === "SCRATCHED") return "取消";
+  if (result.resultStatus === "EXCLUDED") return "除外";
+  if (result.resultStatus === "DISQUALIFIED") return "失格";
+  if (result.resultStatus === "DNF") return "中止";
+  return result.finishRaw;
+}
+
+function HorseSheet({
+  horse, close, openHorseOdds,
+}: {
+  horse: JraEntry;
+  close: () => void;
+  openHorseOdds: (horse: JraEntry) => void;
+}) {
+  const insets = useSafeAreaInsets();
+  const gate = horse.gate != null ? GATE_COLORS[horse.gate] : null;
+  return (
+    <Modal transparent animationType="slide" visible onRequestClose={close}>
+      <View style={styles.modalRoot}>
+        <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={close} />
+        <View style={[styles.bottomSheet, { paddingBottom: Math.max(insets.bottom, 12) + 18 }]}>
+          <View style={styles.sheetHandle} />
+          <View style={styles.rowBetween}>
+            <View style={styles.inline}>
+              <View style={[
+                styles.sheetHorseNo,
+                gate ? { backgroundColor: gate.bg, borderColor: gate.border } : null,
+              ]}>
+                <Text style={[styles.sheetHorseNoLabel, gate ? { color: gate.fg } : null]}>馬番</Text>
+                <Text style={[styles.sheetHorseNoValue, gate ? { color: gate.fg } : null]}>{horse.horseNo ?? "-"}</Text>
+              </View>
+              <View style={styles.sheetNameBlock}>
+                <Text style={styles.horseSheetName}>{horse.horseName}</Text>
+                <Text style={styles.horseSheetMeta}>
+                  {[horse.sex && horse.age ? horse.sex + horse.age : null, horse.carriedWeight != null ? horse.carriedWeight + "kg" : null,
+                    horse.bodyWeight != null ? horse.bodyWeight + "kg (" + (horse.bodyWeightDiff != null && horse.bodyWeightDiff >= 0 ? "+" : "") + (horse.bodyWeightDiff ?? 0) + ")" : null]
+                    .filter(Boolean).join("　")}
+                </Text>
+              </View>
+            </View>
+            <TouchableOpacity onPress={close}><Text style={styles.closeText}>閉じる ×</Text></TouchableOpacity>
+          </View>
+
+          <View style={styles.detailRows}>
+            <View style={styles.detailRow}><Text style={styles.detailKey}>騎手</Text><Text style={styles.detailValue}>{horse.jockeyName ?? "-"}</Text></View>
+            <View style={styles.detailRow}><Text style={styles.detailKey}>調教師</Text><Text style={styles.detailValue}>{horse.trainerName ?? "-"}</Text></View>
+            <View style={styles.detailRow}><Text style={styles.detailKey}>父</Text><Text style={styles.detailValue}>{horse.sire ?? "-"}</Text></View>
+            <View style={styles.detailRow}><Text style={styles.detailKey}>母父</Text><Text style={styles.detailValue}>{horse.damsire ?? "-"}</Text></View>
+          </View>
+
+          {horse.entryStatus === "ACTIVE" && horse.horseNo != null ? (
+            <TouchableOpacity style={styles.horseOddsJump} onPress={() => openHorseOdds(horse)}>
+              <Text style={styles.horseOddsJumpText}>この馬が絡むオッズを見る →</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+export function RaceCardScreen({ raceKey, onOpenWeek, onOpenRace }: Props) {
   const [race, setRace] = useState<JraRace | null>(null);
   const [entries, setEntries] = useState<JraEntry[]>([]);
+  const [dayRaces, setDayRaces] = useState<JraRace[]>([]);
   const [odds, setOdds] = useState<OddsRow[]>([]);
   const [latestObservedAt, setLatestObservedAt] = useState<string | null>(null);
+  const [results, setResults] = useState<JraRaceResult[]>([]);
+  const [payouts, setPayouts] = useState<JraPayout[]>([]);
+  const [raceTab, setRaceTab] = useState<RaceTab>("CARD");
+  const [sortMode, setSortMode] = useState<SortMode>("HORSE_NO");
   const [selectedType, setSelectedType] = useState<OddsBetType>("WIN");
+  const [oddsView, setOddsView] = useState<OddsView>("NORMAL");
   const [selectedHorseNo, setSelectedHorseNo] = useState<number | null>(null);
-  const [busy, setBusy] = useState<"race" | "odds" | null>(null);
+  const [detailHorseNo, setDetailHorseNo] = useState<number | null>(null);
+  const [busy, setBusy] = useState<"race" | "odds" | "result" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [nowMs, setNowMs] = useState(Date.now());
   const autoOddsStarted = useRef(false);
+  const autoResultRaceKey = useRef<string | null>(null);
 
   const load = useCallback(async () => {
-    const [nextRace, nextEntries, nextOdds] = await Promise.all([
-      getRace(raceKey),
+    const nextRace = await getRace(raceKey);
+    if (!nextRace) {
+      setRace(null);
+      return;
+    }
+    const [nextEntries, nextOdds, nextResults, nextPayouts, sameDay] = await Promise.all([
       getWeekEntries(raceKey),
       loadOdds(raceKey),
+      getRaceResults(raceKey),
+      getRacePayouts(raceKey),
+      listRacesForDates([nextRace.raceDate]),
     ]);
     setRace(nextRace);
     setEntries(nextEntries);
     setOdds(nextOdds.rows);
     setLatestObservedAt(nextOdds.latestObservedAt);
+    setResults(nextResults);
+    setPayouts(nextPayouts);
+    setDayRaces(sameDay.filter((item) => item.venue === nextRace.venue).sort((a,b) => a.raceNo - b.raceNo));
     if (!nextOdds.availableTypes.includes(selectedType) && nextOdds.availableTypes.length) {
       setSelectedType(nextOdds.availableTypes[0]);
     }
-  }, [raceKey, selectedType]);
+    if (selectedHorseNo == null) {
+      const firstActive = nextEntries.find((entry) => entry.entryStatus === "ACTIVE" && entry.horseNo != null);
+      if (firstActive?.horseNo != null) setSelectedHorseNo(firstActive.horseNo);
+    }
+  }, [raceKey, selectedHorseNo, selectedType]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    autoOddsStarted.current = false;
+    autoResultRaceKey.current = null;
+    setDetailHorseNo(null);
+    setRaceTab("CARD");
+    setOddsView("NORMAL");
+    setSortMode("HORSE_NO");
+    void load();
+  }, [raceKey]);
+
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 15_000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (!race || race.status !== "OFFICIAL" || !entries.length || autoOddsStarted.current) return;
+    const start = raceStartEpoch(race);
+    if (start != null && start <= Date.now()) return;
     const latestMs = latestObservedAt ? Date.parse(latestObservedAt) : 0;
     if (Number.isFinite(latestMs) && Date.now() - latestMs < 5 * 60 * 1000) return;
     autoOddsStarted.current = true;
     void refreshLatestOdds(race, entries).then(load).catch(() => undefined);
   }, [race, entries, latestObservedAt, load]);
 
+  useEffect(() => {
+    if (raceTab !== "RESULT" || !race || results.length || busy || autoResultRaceKey.current === race.raceKey) return;
+    const start = raceStartEpoch(race);
+    if (start != null && start > Date.now()) return;
+    autoResultRaceKey.current = race.raceKey;
+    setBusy("result");
+    setError(null);
+    void refreshOfficialRaceResult(race)
+      .then(load)
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(null));
+  }, [raceTab, race, results.length, busy, load]);
+
   const latestWinByNo = useMemo(() => {
     const map = new Map<number, number>();
-    for (const row of odds) if (row.betType === "WIN" && row.selection1 != null && row.odds != null) map.set(row.selection1, row.odds);
+    for (const row of odds) {
+      if (row.betType === "WIN" && row.selection1 != null && row.odds != null) map.set(row.selection1, row.odds);
+    }
     return map;
   }, [odds]);
 
-  const availableTypes = useMemo(() =>
-    TYPE_ORDER.filter((type) => odds.some((row) => row.betType === type)),
-  [odds]);
-  const displayedOdds = useMemo(() => odds.filter((row) => row.betType === selectedType), [odds, selectedType]);
+  const sortedEntries = useMemo(() => [...entries].sort((a,b) => {
+    if (sortMode === "POPULARITY") return (a.popularity ?? 999) - (b.popularity ?? 999);
+    return (a.horseNo ?? 999) - (b.horseNo ?? 999);
+  }), [entries, sortMode]);
+
+  const availableTypes = useMemo(
+    () => TYPE_ORDER.filter((type) => odds.some((row) => row.betType === type)),
+    [odds],
+  );
+
   const selectedHorse = entries.find((entry) => entry.horseNo === selectedHorseNo) ?? null;
+  const detailHorse = entries.find((entry) => entry.horseNo === detailHorseNo) ?? null;
+
+  const displayedOdds = useMemo(() => {
+    let rows = odds.filter((row) => row.betType === selectedType);
+    if (oddsView === "HORSE" && selectedHorse) {
+      const target = selectedType === "BRACKET_QUINELLA" ? selectedHorse.gate : selectedHorse.horseNo;
+      rows = rows.filter((row) =>
+        target != null && [row.selection1,row.selection2,row.selection3].some((value) => value === target)
+      );
+      rows = [...rows].sort((a,b) => oddsSortValue(a) - oddsSortValue(b));
+    }
+    return rows;
+  }, [odds, selectedType, oddsView, selectedHorse]);
+
+  const currentIndex = dayRaces.findIndex((item) => item.raceKey === raceKey);
+  const previousRace = currentIndex > 0 ? dayRaces[currentIndex - 1] : null;
+  const nextRace = currentIndex >= 0 && currentIndex < dayRaces.length - 1 ? dayRaces[currentIndex + 1] : null;
 
   const refreshCard = async () => {
     if (!race || busy) return;
@@ -80,6 +275,7 @@ export function RaceCardScreen({ raceKey, onBack, onRefreshAll }: Props) {
     catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(null); }
   };
+
   const refreshOdds = async () => {
     if (!race || busy) return;
     setBusy("odds"); setError(null);
@@ -91,159 +287,475 @@ export function RaceCardScreen({ raceKey, onBack, onRefreshAll }: Props) {
     finally { setBusy(null); }
   };
 
+  const refreshResult = async () => {
+    if (!race || busy) return;
+    setBusy("result"); setError(null);
+    try {
+      await refreshOfficialRaceResult(race);
+      await load();
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(null); }
+  };
+
+  const openHorseOdds = (horse: JraEntry) => {
+    if (horse.horseNo == null) return;
+    setSelectedHorseNo(horse.horseNo);
+    setOddsView("HORSE");
+    const firstCombo = HORSE_RANK_TYPES.find((type) => availableTypes.includes(type)) ?? "QUINELLA";
+    setSelectedType(firstCombo);
+    setRaceTab("ODDS");
+    setDetailHorseNo(null);
+  };
+
   if (!race) {
-    return <SafeAreaView style={styles.safeArea}><View style={styles.loading}><ActivityIndicator /></View></SafeAreaView>;
+    return <SafeAreaView edges={["top"]} style={styles.safeArea}><View style={styles.loading}><ActivityIndicator /></View></SafeAreaView>;
   }
 
+  const status = raceState(race, results.length > 0);
+  const isFuture = (raceStartEpoch(race) ?? Infinity) > Date.now();
+
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView edges={["top"]} style={styles.safeArea}>
       <ScrollView contentContainerStyle={styles.container}>
-        <TouchableOpacity onPress={onBack}><Text style={styles.back}>← 今日のレース</Text></TouchableOpacity>
+        <View style={styles.topBar}>
+          <TouchableOpacity style={styles.topSide} onPress={onOpenWeek}><Text style={styles.backArrow}>←</Text></TouchableOpacity>
+          <Text style={styles.topTitle}>{race.venue} {race.raceNo}R</Text>
+          <View style={[styles.topSide, styles.topRight]}><Text style={styles.liveText}>● LIVE</Text></View>
+        </View>
 
         <View style={styles.hero}>
           <View style={styles.rowBetween}>
-            <Text style={styles.heroRace}>{race.venue} {race.raceNo}R</Text>
-            <Text style={styles.start}>{race.startTime ?? "--:--"} 発走</Text>
-          </View>
-          <Text style={styles.heroTitle}>{race.raceName ?? "レース名取得待ち"}</Text>
-          <Text style={styles.meta}>
-            {[race.surface, race.distanceM ? race.distanceM + "m" : null, race.direction, race.weather, race.trackCondition].filter(Boolean).join(" / ") || "詳細取得待ち"}
-          </Text>
-          <View style={styles.actions}>
-            <TouchableOpacity style={styles.secondaryButton} onPress={() => void refreshCard()} disabled={busy != null || race.status !== "OFFICIAL"}>
-              <Text style={styles.secondaryText}>{busy === "race" ? "更新中" : "出馬表更新"}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.primaryButton} onPress={() => void refreshOdds()} disabled={busy != null || race.status !== "OFFICIAL"}>
-              <Text style={styles.primaryText}>{busy === "odds" ? "取得中" : "最新オッズ"}</Text>
-            </TouchableOpacity>
-          </View>
-          {race.status !== "OFFICIAL" && (
-            <TouchableOpacity style={styles.waiting} onPress={() => void onRefreshAll()}>
-              <Text style={styles.waitingText}>正式出馬表は未取得。今日のJRAデータを再確認</Text>
-            </TouchableOpacity>
-          )}
-          {error && <Text style={styles.error}>{error}</Text>}
-        </View>
-
-        <Text style={styles.sectionTitle}>出走表</Text>
-        {!entries.length ? (
-          <View style={styles.card}><Text style={styles.muted}>正式出馬表の公開待ち。</Text></View>
-        ) : entries.map((entry) => {
-          const latestWin = entry.horseNo == null ? null : latestWinByNo.get(entry.horseNo) ?? entry.winOdds;
-          const inactive = entry.entryStatus !== "ACTIVE";
-          return (
-            <TouchableOpacity
-              key={entry.horseName + ":" + entry.horseNo}
-              style={[styles.entry, inactive && styles.entryInactive]}
-              onPress={() => setSelectedHorseNo(entry.horseNo)}
-            >
-              <View style={styles.gate}><Text style={styles.gateText}>{entry.gate ?? "-"}</Text></View>
-              <Text style={styles.horseNo}>{entry.horseNo ?? "-"}</Text>
-              <View style={styles.entryMain}>
-                <Text style={[styles.horseName, inactive && styles.strike]}>{entry.horseName}</Text>
-                <Text style={styles.entryMeta}>
-                  {[entry.sex && entry.age ? entry.sex + entry.age : null, entry.carriedWeight ? entry.carriedWeight + "kg" : null, entry.jockeyName].filter(Boolean).join(" / ")}
-                </Text>
+            <View style={styles.flex1}>
+              <View style={styles.inline}>
+                <Text style={styles.heroTime}>{race.startTime ?? "--:--"}</Text>
+                <Text style={styles.heroTitle}>{race.raceName ?? "レース名取得待ち"}</Text>
               </View>
-              <View style={styles.oddsMini}>
-                <Text style={styles.oddsValue}>{latestWin != null ? latestWin.toFixed(1) : "-"}</Text>
-                <Text style={styles.oddsLabel}>{inactive ? (entry.entryStatus === "SCRATCHED" ? "取消" : "除外") : "単勝"}</Text>
-              </View>
-            </TouchableOpacity>
-          );
-        })}
-
-        {selectedHorse && (
-          <View style={styles.horseDetail}>
-            <View style={styles.rowBetween}>
-              <Text style={styles.sectionTitle}>{selectedHorse.horseNo}番 {selectedHorse.horseName}</Text>
-              <TouchableOpacity onPress={() => setSelectedHorseNo(null)}><Text style={styles.close}>閉じる</Text></TouchableOpacity>
+              <Text style={styles.heroMeta}>
+                {[race.raceClass, race.surface, race.distanceM ? race.distanceM.toLocaleString() + "m" : null, race.direction, race.weather, race.trackCondition].filter(Boolean).join("　")}
+              </Text>
             </View>
-            <Text style={styles.detailLine}>性齢・毛色: {[selectedHorse.sex, selectedHorse.age, selectedHorse.coatColor].filter((v) => v != null).join(" ") || "-"}</Text>
-            <Text style={styles.detailLine}>騎手: {selectedHorse.jockeyName ?? "-"}</Text>
-            <Text style={styles.detailLine}>調教師: {selectedHorse.trainerName ?? "-"}</Text>
-            <Text style={styles.detailLine}>斤量: {selectedHorse.carriedWeight != null ? selectedHorse.carriedWeight + "kg" : "-"}</Text>
-            <Text style={styles.detailLine}>馬体重: {selectedHorse.bodyWeight != null ? selectedHorse.bodyWeight + "kg (" + (selectedHorse.bodyWeightDiff != null && selectedHorse.bodyWeightDiff >= 0 ? "+" : "") + (selectedHorse.bodyWeightDiff ?? 0) + ")" : "-"}</Text>
-            <Text style={styles.detailLine}>血統: 父 {selectedHorse.sire ?? "-"} / 母 {selectedHorse.dam ?? "-"} / 母父 {selectedHorse.damsire ?? "-"}</Text>
+            <View style={styles.statusPill}><Text style={styles.statusText}>{status}</Text></View>
           </View>
-        )}
-
-        <View style={styles.oddsHeader}>
-          <Text style={styles.sectionTitle}>最新オッズ</Text>
-          <Text style={styles.updated}>更新 {latestObservedAt ? latestObservedAt.slice(11, 19) : "未取得"}</Text>
         </View>
-        {availableTypes.length ? (
+
+        <View style={styles.raceNavigator}>
+          <TouchableOpacity
+            style={[styles.raceNavSide, !previousRace && styles.disabled]}
+            disabled={!previousRace}
+            onPress={() => previousRace && onOpenRace(previousRace.raceKey)}
+          >
+            <Text style={styles.raceNavText}>‹ {previousRace ? previousRace.raceNo + "R" : "前R"}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.raceNavCenter} onPress={onOpenWeek}>
+            <Text style={styles.raceNavCenterText}>今週のレース</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.raceNavSide, !nextRace && styles.disabled]}
+            disabled={!nextRace}
+            onPress={() => nextRace && onOpenRace(nextRace.raceKey)}
+          >
+            <Text style={styles.raceNavText}>{nextRace ? nextRace.raceNo + "R" : "次R"} ›</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.raceTabs}>
+          {([
+            ["CARD","出走表"],["ODDS","オッズ"],["INFO","レース情報"],["RESULT","結果"],
+          ] as Array<[RaceTab,string]>).map(([tab,label]) => (
+            <TouchableOpacity key={tab} style={[styles.raceTab, raceTab === tab && styles.raceTabActive]} onPress={() => setRaceTab(tab)}>
+              <Text style={[styles.raceTabText, raceTab === tab && styles.raceTabTextActive]}>{label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {error ? <Text style={styles.error}>{error}</Text> : null}
+
+        {raceTab === "CARD" ? (
           <>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.typeRow}>
-              {availableTypes.map((type) => (
-                <TouchableOpacity key={type} style={[styles.typeChip, selectedType === type && styles.typeChipActive]} onPress={() => setSelectedType(type)}>
-                  <Text style={[styles.typeText, selectedType === type && styles.typeTextActive]}>{oddsBetTypeLabel(type)}</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-            <View style={styles.oddsTable}>
-              {displayedOdds.map((row) => (
-                <View key={[row.betType,row.selection1,row.selection2,row.selection3].join(":")} style={styles.oddsRow}>
-                  <Text style={styles.selection}>{formatSelection(row)}</Text>
-                  <Text style={styles.price}>{formatOdds(row)}</Text>
-                </View>
-              ))}
+            <View style={styles.sortHeader}>
+              <Text style={styles.sortLabel}>表示順</Text>
+              <Text style={styles.sortCurrent}>表示中：{sortMode === "HORSE_NO" ? "馬番順" : "人気順"}</Text>
             </View>
+            <View style={styles.sortTabs}>
+              <TouchableOpacity style={[styles.sortTab, sortMode === "HORSE_NO" && styles.sortTabActive]} onPress={() => setSortMode("HORSE_NO")}>
+                <Text style={[styles.sortTabText, sortMode === "HORSE_NO" && styles.sortTabTextActive]}>馬番順</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.sortTab, sortMode === "POPULARITY" && styles.sortTabActive]} onPress={() => setSortMode("POPULARITY")}>
+                <Text style={[styles.sortTabText, sortMode === "POPULARITY" && styles.sortTabTextActive]}>人気順</Text>
+              </TouchableOpacity>
+              <View style={[styles.sortTab, styles.disabled]}>
+                <Text style={styles.sortTabText}>AI予想順</Text>
+                <Text style={styles.aiPending}>未接続</Text>
+              </View>
+            </View>
+
+            {race.status !== "OFFICIAL" ? (
+              <View style={styles.card}><Text style={styles.muted}>正式出馬表の公開待ち。</Text></View>
+            ) : !entries.length ? (
+              <View style={styles.card}>
+                <Text style={styles.muted}>出走馬データがない。出馬表を再取得する。</Text>
+                <TouchableOpacity style={styles.inlineButton} onPress={() => void refreshCard()}>
+                  <Text style={styles.inlineButtonText}>{busy === "race" ? "更新中" : "出馬表を更新"}</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <View style={styles.entryList}>
+                {sortedEntries.map((entry, index) => {
+                  const latestWin = entry.horseNo == null ? null : latestWinByNo.get(entry.horseNo) ?? entry.winOdds;
+                  const inactive = entry.entryStatus !== "ACTIVE";
+                  const gate = entry.gate != null ? GATE_COLORS[entry.gate] : null;
+                  return (
+                    <TouchableOpacity
+                      key={entry.horseName + ":" + entry.horseNo}
+                      style={[styles.entryRow, index > 0 && styles.borderTop, inactive && styles.entryInactive]}
+                      onPress={() => setDetailHorseNo(entry.horseNo)}
+                    >
+                      <View style={[
+                        styles.horseNoBox,
+                        gate ? { backgroundColor: gate.bg, borderColor: gate.border } : null,
+                      ]}>
+                        <Text style={[styles.horseNoLabel, gate ? { color: gate.fg } : null]}>馬番</Text>
+                        <Text style={[styles.horseNoValue, gate ? { color: gate.fg } : null]}>{entry.horseNo ?? "-"}</Text>
+                      </View>
+
+                      {sortMode === "POPULARITY" && entry.popularity != null ? (
+                        <View style={styles.rankBadge}><Text style={styles.rankBadgeText}>{entry.popularity}人気</Text></View>
+                      ) : null}
+
+                      <View style={styles.entryMain}>
+                        <View style={styles.inline}>
+                          <Text style={[styles.horseName, inactive && styles.strike]}>{entry.horseName}</Text>
+                          {inactive ? (
+                            <View style={styles.cancelPill}>
+                              <Text style={styles.cancelPillText}>{entry.entryStatus === "SCRATCHED" ? "取消" : "除外"}</Text>
+                            </View>
+                          ) : null}
+                        </View>
+                        <Text style={styles.entryMeta}>
+                          {[entry.sex && entry.age ? entry.sex + entry.age : null,
+                            entry.carriedWeight != null ? entry.carriedWeight + "kg" : null,
+                            entry.jockeyName].filter(Boolean).join("　")}
+                        </Text>
+                      </View>
+                      <View style={styles.entryOdds}>
+                        <Text style={styles.entryOddsValue}>{latestWin != null ? latestWin.toFixed(1) : "-"}</Text>
+                        <Text style={styles.entryOddsPopularity}>{entry.popularity != null ? entry.popularity + "人気" : ""}</Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
           </>
-        ) : (
-          <View style={styles.card}><Text style={styles.muted}>「最新オッズ」でJRA LIVEオッズを取得する。</Text></View>
-        )}
+        ) : null}
+
+        {raceTab === "ODDS" ? (
+          <>
+            <View style={styles.oddsFresh}>
+              <View>
+                <Text style={styles.oddsFreshLabel}>最新オッズ</Text>
+                <Text style={styles.oddsFreshTime}>最終取得 {formatClock(latestObservedAt)}</Text>
+                <Text style={styles.oddsFreshAgo}>{freshnessText(latestObservedAt, nowMs)}</Text>
+              </View>
+              <TouchableOpacity style={styles.oddsRefreshButton} onPress={() => void refreshOdds()} disabled={busy != null || race.status !== "OFFICIAL"}>
+                <Text style={styles.oddsRefreshText}>{busy === "odds" ? "取得中" : "更新 ↻"}</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.oddsModeTabs}>
+              <TouchableOpacity style={[styles.oddsModeTab, oddsView === "NORMAL" && styles.oddsModeTabActive]} onPress={() => setOddsView("NORMAL")}>
+                <Text style={[styles.oddsModeText, oddsView === "NORMAL" && styles.oddsModeTextActive]}>通常オッズ</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.oddsModeTab, oddsView === "HORSE" && styles.oddsModeTabActive]}
+                onPress={() => {
+                  setOddsView("HORSE");
+                  if (!HORSE_RANK_TYPES.includes(selectedType)) {
+                    setSelectedType(HORSE_RANK_TYPES.find((type) => availableTypes.includes(type)) ?? "QUINELLA");
+                  }
+                }}
+              >
+                <Text style={[styles.oddsModeText, oddsView === "HORSE" && styles.oddsModeTextActive]}>馬別ランキング</Text>
+              </TouchableOpacity>
+            </View>
+
+            {oddsView === "HORSE" ? (
+              <>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horsePicker}>
+                  {entries.filter((entry) => entry.entryStatus === "ACTIVE" && entry.horseNo != null).map((entry) => (
+                    <TouchableOpacity
+                      key={entry.horseNo}
+                      style={[styles.horsePickerChip, selectedHorseNo === entry.horseNo && styles.horsePickerChipActive]}
+                      onPress={() => setSelectedHorseNo(entry.horseNo)}
+                    >
+                      <Text style={[styles.horsePickerNo, selectedHorseNo === entry.horseNo && styles.horsePickerActiveText]}>{entry.horseNo}</Text>
+                      <Text style={[styles.horsePickerName, selectedHorseNo === entry.horseNo && styles.horsePickerNameActive]} numberOfLines={1}>{entry.horseName}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+                <Text style={styles.horseOddsHeading}>
+                  {selectedHorse ? `${selectedHorse.horseNo}番 ${selectedHorse.horseName} が絡む ${oddsBetTypeLabel(selectedType)}オッズランキング` : "対象馬を選択"}
+                </Text>
+              </>
+            ) : null}
+
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.typeRow}>
+              {(oddsView === "HORSE" ? HORSE_RANK_TYPES : TYPE_ORDER).map((type) => {
+                const available = availableTypes.includes(type);
+                return (
+                  <TouchableOpacity
+                    key={type}
+                    disabled={!available}
+                    style={[styles.typeChip, selectedType === type && styles.typeChipActive, !available && styles.disabled]}
+                    onPress={() => setSelectedType(type)}
+                  >
+                    <Text style={[styles.typeText, selectedType === type && styles.typeTextActive]}>{oddsBetTypeLabel(type)}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+
+            {displayedOdds.length ? (
+              <View style={styles.oddsTable}>
+                {displayedOdds.map((row, index) => (
+                  <View key={[row.betType,row.selection1,row.selection2,row.selection3].join(":")} style={[styles.oddsRow, index > 0 && styles.borderTop]}>
+                    {oddsView === "HORSE" ? <View style={styles.oddsRank}><Text style={styles.oddsRankText}>{index + 1}</Text></View> : null}
+                    <Text style={styles.selection}>{formatSelection(row)}</Text>
+                    <Text style={styles.price}>{formatOdds(row)}</Text>
+                  </View>
+                ))}
+              </View>
+            ) : (
+              <View style={styles.card}>
+                <Text style={styles.muted}>{race.status === "OFFICIAL" ? "この条件のオッズはまだ取得していない。" : "正式出馬表の公開待ち。"}</Text>
+              </View>
+            )}
+          </>
+        ) : null}
+
+        {raceTab === "INFO" ? (
+          <View style={styles.infoTable}>
+            <View style={styles.infoRow}><Text style={styles.infoKey}>発走</Text><Text style={styles.infoValue}>{race.startTime ?? "-"}</Text></View>
+            <View style={styles.infoRow}><Text style={styles.infoKey}>条件</Text><Text style={styles.infoValue}>{race.raceClass ?? "-"}</Text></View>
+            <View style={styles.infoRow}><Text style={styles.infoKey}>コース</Text><Text style={styles.infoValue}>{[race.surface, race.distanceM ? race.distanceM.toLocaleString() + "m" : null, race.direction].filter(Boolean).join(" ") || "-"}</Text></View>
+            <View style={styles.infoRow}><Text style={styles.infoKey}>天候</Text><Text style={styles.infoValue}>{race.weather ?? "-"}</Text></View>
+            <View style={styles.infoRow}><Text style={styles.infoKey}>馬場</Text><Text style={styles.infoValue}>{race.trackCondition ?? "-"}</Text></View>
+            <View style={styles.infoRow}><Text style={styles.infoKey}>出走</Text><Text style={styles.infoValue}>{entries.filter((entry) => entry.entryStatus === "ACTIVE").length || "-"}頭</Text></View>
+            <TouchableOpacity style={styles.cardRefresh} onPress={() => void refreshCard()} disabled={busy != null || race.status !== "OFFICIAL"}>
+              <Text style={styles.cardRefreshText}>{busy === "race" ? "更新中" : "出馬表・馬場状態を更新 ↻"}</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
+        {raceTab === "RESULT" ? (
+          results.length ? (
+            <>
+              <View style={styles.resultHeader}>
+                <Text style={styles.sectionTitle}>確定結果</Text>
+                <TouchableOpacity onPress={() => void refreshResult()} disabled={busy != null}>
+                  <Text style={styles.resultRefresh}>{busy === "result" ? "取得中" : "再取得 ↻"}</Text>
+                </TouchableOpacity>
+              </View>
+              <View style={styles.resultTable}>
+                {results.map((result, index) => {
+                  const winOdds = result.horseNo != null ? latestWinByNo.get(result.horseNo) : null;
+                  return (
+                    <View key={result.horseName + ":" + result.finishRaw} style={[styles.resultRow, index > 0 && styles.borderTop]}>
+                      <View style={styles.finishBox}><Text style={styles.finishText}>{resultStatusLabel(result)}</Text></View>
+                      <View style={styles.resultHorseNo}>
+                        <Text style={styles.resultHorseNoLabel}>馬番</Text>
+                        <Text style={styles.resultHorseNoValue}>{result.horseNo ?? "-"}</Text>
+                      </View>
+                      <View style={styles.flex1}>
+                        <Text style={styles.resultHorseName}>{result.horseName}</Text>
+                        <Text style={styles.resultMeta}>
+                          {[result.popularity != null ? result.popularity + "人気" : null, winOdds != null ? "単勝 " + winOdds.toFixed(1) : null].filter(Boolean).join("　")}
+                        </Text>
+                      </View>
+                      <View style={styles.resultTimeBox}>
+                        <Text style={styles.resultTime}>{result.finishTime ?? "-"}</Text>
+                        <Text style={styles.resultSub}>{result.margin ? "着差 " + result.margin : ""}</Text>
+                        <Text style={styles.resultSub}>{result.last3f != null ? "上がり " + result.last3f.toFixed(1) : ""}</Text>
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+
+              <Text style={styles.payoutTitle}>払戻</Text>
+              {payouts.length ? (
+                <View style={styles.payoutTable}>
+                  {payouts.map((payout, index) => (
+                    <View key={payout.betType + ":" + payout.selection} style={[styles.payoutRow, index > 0 && styles.borderTop]}>
+                      <Text style={styles.payoutType}>{oddsBetTypeLabel(payout.betType)}</Text>
+                      <Text style={styles.payoutSelection}>{payout.selection}</Text>
+                      <Text style={styles.payoutValue}>{payout.payoutYen != null ? payout.payoutYen.toLocaleString() + "円" : "-"}</Text>
+                    </View>
+                  ))}
+                </View>
+              ) : <View style={styles.card}><Text style={styles.muted}>払戻情報の取得待ち。</Text></View>}
+            </>
+          ) : (
+            <View style={styles.resultEmpty}>
+              {busy === "result" ? <ActivityIndicator /> : null}
+              <Text style={styles.resultEmptyTitle}>{isFuture ? "結果はレース終了後に表示" : "JRA公式結果を確認中"}</Text>
+              <Text style={styles.resultEmptySub}>
+                {isFuture ? "確定後、着順・上がり3F・払戻をここに表示する。" : "結果が公開済みなら取得して保存する。"}
+              </Text>
+              {!isFuture ? (
+                <TouchableOpacity style={styles.resultButton} onPress={() => void refreshResult()} disabled={busy != null}>
+                  <Text style={styles.resultButtonText}>{busy === "result" ? "取得中" : "結果を取得 ↻"}</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          )
+        ) : null}
       </ScrollView>
+
+      {detailHorse ? <HorseSheet horse={detailHorse} close={() => setDetailHorseNo(null)} openHorseOdds={openHorseOdds} /> : null}
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: "#f3f4f6" },
-  container: { padding: 14, paddingBottom: 48 },
+  safeArea: { flex: 1, backgroundColor: "#f4f6f8" },
+  container: { padding: 16, paddingBottom: 28, gap: 12 },
+  flex1: { flex: 1 },
   loading: { flex: 1, justifyContent: "center", alignItems: "center" },
-  back: { fontSize: 13, fontWeight: "700", color: "#374151", marginBottom: 10 },
-  hero: { backgroundColor: "#111827", borderRadius: 18, padding: 16, marginBottom: 18 },
-  heroRace: { color: "#fff", fontWeight: "900", fontSize: 18 },
-  heroTitle: { color: "#fff", fontWeight: "900", fontSize: 22, marginTop: 8 },
-  meta: { color: "#d1d5db", marginTop: 6, fontSize: 12 },
-  start: { color: "#d1d5db", fontWeight: "700" },
-  rowBetween: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  actions: { flexDirection: "row", gap: 8, marginTop: 14 },
-  primaryButton: { flex: 1, borderRadius: 10, backgroundColor: "#fff", padding: 11, alignItems: "center" },
-  primaryText: { color: "#111827", fontWeight: "900" },
-  secondaryButton: { flex: 1, borderRadius: 10, borderWidth: 1, borderColor: "#6b7280", padding: 11, alignItems: "center" },
-  secondaryText: { color: "#fff", fontWeight: "800" },
-  waiting: { marginTop: 10, borderRadius: 10, backgroundColor: "#374151", padding: 10 },
-  waitingText: { color: "#fff", fontSize: 12, fontWeight: "700" },
-  error: { marginTop: 10, color: "#fecaca", fontSize: 12 },
-  sectionTitle: { fontSize: 19, fontWeight: "900", marginBottom: 8 },
-  card: { borderRadius: 14, backgroundColor: "#fff", padding: 14, marginBottom: 14 },
-  muted: { color: "#6b7280" },
-  entry: { flexDirection: "row", alignItems: "center", backgroundColor: "#fff", borderRadius: 12, padding: 10, marginBottom: 6 },
-  entryInactive: { opacity: 0.55 },
-  gate: { width: 28, height: 28, borderRadius: 7, backgroundColor: "#e5e7eb", justifyContent: "center", alignItems: "center" },
-  gateText: { fontWeight: "900" },
-  horseNo: { width: 30, textAlign: "center", fontWeight: "900", fontSize: 16 },
+  topBar: { height: 46, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  topSide: { width: 72 },
+  topRight: { alignItems: "flex-end" },
+  backArrow: { color: "#111827", fontSize: 28, fontWeight: "800" },
+  topTitle: { color: "#111827", fontSize: 22, fontWeight: "900" },
+  liveText: { color: "#6b7280", fontSize: 11, fontWeight: "900" },
+  rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  inline: { flexDirection: "row", alignItems: "center", gap: 7 },
+  hero: { backgroundColor: "#111827", borderRadius: 20, padding: 16 },
+  heroTime: { color: "#9ca3af", fontSize: 14, fontWeight: "900" },
+  heroTitle: { color: "#fff", fontSize: 21, fontWeight: "900", flexShrink: 1 },
+  heroMeta: { color: "#d1d5db", fontSize: 12, fontWeight: "800", marginTop: 7 },
+  statusPill: { backgroundColor: "#374151", borderRadius: 999, paddingHorizontal: 11, paddingVertical: 7, marginLeft: 8 },
+  statusText: { color: "#fff", fontSize: 10, fontWeight: "900" },
+  raceNavigator: { backgroundColor: "#fff", borderRadius: 16, padding: 4, flexDirection: "row", alignItems: "center" },
+  raceNavSide: { width: 82, minHeight: 42, alignItems: "center", justifyContent: "center" },
+  raceNavText: { color: "#111827", fontSize: 12, fontWeight: "900" },
+  raceNavCenter: { flex: 1, minHeight: 42, backgroundColor: "#111827", borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  raceNavCenterText: { color: "#fff", fontSize: 12, fontWeight: "900" },
+  disabled: { opacity: 0.32 },
+  raceTabs: { flexDirection: "row", gap: 6 },
+  raceTab: { flex: 1, minHeight: 50, backgroundColor: "#e5e7eb", borderRadius: 13, alignItems: "center", justifyContent: "center" },
+  raceTabActive: { backgroundColor: "#111827" },
+  raceTabText: { color: "#4b5563", fontSize: 12, fontWeight: "900" },
+  raceTabTextActive: { color: "#fff" },
+  error: { backgroundColor: "#fee2e2", color: "#991b1b", borderRadius: 12, padding: 10, fontSize: 11 },
+  sortHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  sortLabel: { color: "#6b7280", fontSize: 11, fontWeight: "800" },
+  sortCurrent: { color: "#111827", fontSize: 12, fontWeight: "900" },
+  sortTabs: { flexDirection: "row", backgroundColor: "#e5e7eb", borderRadius: 14, padding: 4 },
+  sortTab: { flex: 1, minHeight: 48, alignItems: "center", justifyContent: "center", borderRadius: 11 },
+  sortTabActive: { backgroundColor: "#fff" },
+  sortTabText: { color: "#6b7280", fontSize: 11, fontWeight: "900" },
+  sortTabTextActive: { color: "#111827" },
+  aiPending: { color: "#9ca3af", fontSize: 7, fontWeight: "800", marginTop: 1 },
+  card: { backgroundColor: "#fff", borderRadius: 16, padding: 15 },
+  muted: { color: "#6b7280", fontSize: 12, lineHeight: 18 },
+  inlineButton: { marginTop: 10, backgroundColor: "#111827", borderRadius: 12, paddingVertical: 10, alignItems: "center" },
+  inlineButtonText: { color: "#fff", fontSize: 11, fontWeight: "900" },
+  entryList: { backgroundColor: "#fff", borderRadius: 17, paddingHorizontal: 12 },
+  entryRow: { minHeight: 72, flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 10 },
+  entryInactive: { backgroundColor: "#fafafa" },
+  borderTop: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: "#e5e7eb" },
+  horseNoBox: { width: 45, height: 52, borderRadius: 10, borderWidth: 1.5, alignItems: "center", justifyContent: "center" },
+  horseNoLabel: { color: "#6b7280", fontSize: 7, fontWeight: "900" },
+  horseNoValue: { color: "#111827", fontSize: 21, fontWeight: "900" },
+  rankBadge: { backgroundColor: "#111827", borderRadius: 9, paddingHorizontal: 7, paddingVertical: 6 },
+  rankBadgeText: { color: "#fff", fontSize: 9, fontWeight: "900" },
   entryMain: { flex: 1 },
-  horseName: { fontWeight: "900", fontSize: 15 },
-  strike: { textDecorationLine: "line-through" },
-  entryMeta: { marginTop: 2, fontSize: 11, color: "#6b7280" },
-  oddsMini: { alignItems: "flex-end" },
-  oddsValue: { fontWeight: "900", fontSize: 16 },
-  oddsLabel: { fontSize: 10, color: "#6b7280" },
-  horseDetail: { marginTop: 8, marginBottom: 18, borderRadius: 14, backgroundColor: "#fff", padding: 14 },
-  close: { color: "#6b7280", fontSize: 12, fontWeight: "700" },
-  detailLine: { marginTop: 6, fontSize: 13, lineHeight: 19 },
-  oddsHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "baseline", marginTop: 6 },
-  updated: { fontSize: 11, color: "#6b7280" },
-  typeRow: { gap: 7, paddingBottom: 10 },
-  typeChip: { borderRadius: 999, backgroundColor: "#e5e7eb", paddingHorizontal: 12, paddingVertical: 7 },
+  horseName: { color: "#111827", fontSize: 15, fontWeight: "900", flexShrink: 1 },
+  strike: { textDecorationLine: "line-through", color: "#6b7280" },
+  cancelPill: { backgroundColor: "#b91c1c", borderRadius: 999, paddingHorizontal: 6, paddingVertical: 2 },
+  cancelPillText: { color: "#fff", fontSize: 8, fontWeight: "900" },
+  entryMeta: { color: "#6b7280", fontSize: 10, fontWeight: "700", marginTop: 4 },
+  entryOdds: { width: 54, alignItems: "flex-end" },
+  entryOddsValue: { color: "#111827", fontSize: 18, fontWeight: "900" },
+  entryOddsPopularity: { color: "#6b7280", fontSize: 10, fontWeight: "800", marginTop: 2 },
+  modalRoot: { flex: 1, justifyContent: "flex-end" },
+  modalBackdrop: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, backgroundColor: "rgba(0,0,0,0.36)" },
+  bottomSheet: { backgroundColor: "#111827", borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 18 },
+  sheetHandle: { width: 48, height: 4, borderRadius: 2, backgroundColor: "#4b5563", alignSelf: "center", marginBottom: 17 },
+  sheetHorseNo: { width: 50, height: 58, borderRadius: 11, borderWidth: 1.5, alignItems: "center", justifyContent: "center" },
+  sheetHorseNoLabel: { color: "#9ca3af", fontSize: 8, fontWeight: "900" },
+  sheetHorseNoValue: { color: "#fff", fontSize: 23, fontWeight: "900" },
+  sheetNameBlock: { maxWidth: 220 },
+  horseSheetName: { color: "#fff", fontSize: 19, fontWeight: "900" },
+  horseSheetMeta: { color: "#d1d5db", fontSize: 11, fontWeight: "700", marginTop: 4 },
+  closeText: { color: "#9ca3af", fontSize: 11, fontWeight: "800" },
+  detailRows: { marginTop: 16 },
+  detailRow: { flexDirection: "row", paddingVertical: 6 },
+  detailKey: { width: 64, color: "#9ca3af", fontSize: 11, fontWeight: "800" },
+  detailValue: { color: "#fff", fontSize: 13, fontWeight: "800", flex: 1 },
+  horseOddsJump: { marginTop: 17, backgroundColor: "#fff", borderRadius: 15, paddingVertical: 14, alignItems: "center" },
+  horseOddsJumpText: { color: "#111827", fontSize: 12, fontWeight: "900" },
+  oddsFresh: { backgroundColor: "#111827", borderRadius: 17, padding: 15, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  oddsFreshLabel: { color: "#9ca3af", fontSize: 10, fontWeight: "900" },
+  oddsFreshTime: { color: "#fff", fontSize: 16, fontWeight: "900", marginTop: 2 },
+  oddsFreshAgo: { color: "#9ca3af", fontSize: 9, fontWeight: "700", marginTop: 2 },
+  oddsRefreshButton: { backgroundColor: "#374151", borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10 },
+  oddsRefreshText: { color: "#fff", fontSize: 11, fontWeight: "900" },
+  oddsModeTabs: { flexDirection: "row", backgroundColor: "#e5e7eb", borderRadius: 14, padding: 4 },
+  oddsModeTab: { flex: 1, minHeight: 44, alignItems: "center", justifyContent: "center", borderRadius: 11 },
+  oddsModeTabActive: { backgroundColor: "#fff" },
+  oddsModeText: { color: "#6b7280", fontSize: 11, fontWeight: "900" },
+  oddsModeTextActive: { color: "#111827" },
+  horsePicker: { gap: 7, paddingBottom: 2 },
+  horsePickerChip: { minWidth: 80, maxWidth: 112, backgroundColor: "#e5e7eb", borderRadius: 12, paddingHorizontal: 10, paddingVertical: 8 },
+  horsePickerChipActive: { backgroundColor: "#111827" },
+  horsePickerNo: { color: "#111827", fontSize: 13, fontWeight: "900" },
+  horsePickerActiveText: { color: "#fff" },
+  horsePickerName: { color: "#6b7280", fontSize: 8, fontWeight: "700", marginTop: 2 },
+  horsePickerNameActive: { color: "#d1d5db" },
+  horseOddsHeading: { color: "#111827", fontSize: 12, fontWeight: "900" },
+  typeRow: { gap: 7, paddingBottom: 2 },
+  typeChip: { borderRadius: 999, backgroundColor: "#e5e7eb", paddingHorizontal: 13, paddingVertical: 8 },
   typeChipActive: { backgroundColor: "#111827" },
-  typeText: { fontWeight: "800", fontSize: 12, color: "#374151" },
+  typeText: { color: "#4b5563", fontSize: 11, fontWeight: "900" },
   typeTextActive: { color: "#fff" },
-  oddsTable: { backgroundColor: "#fff", borderRadius: 14, paddingHorizontal: 12 },
-  oddsRow: { flexDirection: "row", justifyContent: "space-between", paddingVertical: 9, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: "#e5e7eb" },
-  selection: { fontWeight: "800" },
-  price: { fontWeight: "900" },
+  oddsTable: { backgroundColor: "#fff", borderRadius: 16, paddingHorizontal: 12 },
+  oddsRow: { minHeight: 48, flexDirection: "row", alignItems: "center" },
+  oddsRank: { width: 25, height: 25, borderRadius: 13, backgroundColor: "#eef2f7", alignItems: "center", justifyContent: "center", marginRight: 9 },
+  oddsRankText: { color: "#6b7280", fontSize: 10, fontWeight: "900" },
+  selection: { flex: 1, color: "#111827", fontSize: 14, fontWeight: "900" },
+  price: { color: "#111827", fontSize: 15, fontWeight: "900" },
+  infoTable: { backgroundColor: "#fff", borderRadius: 17, paddingHorizontal: 15 },
+  infoRow: { flexDirection: "row", paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: "#e5e7eb" },
+  infoKey: { width: 76, color: "#6b7280", fontSize: 12, fontWeight: "800" },
+  infoValue: { flex: 1, color: "#111827", fontSize: 13, fontWeight: "900" },
+  cardRefresh: { marginVertical: 14, backgroundColor: "#111827", borderRadius: 12, paddingVertical: 12, alignItems: "center" },
+  cardRefreshText: { color: "#fff", fontSize: 11, fontWeight: "900" },
+  resultHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  sectionTitle: { color: "#111827", fontSize: 18, fontWeight: "900" },
+  resultRefresh: { color: "#6b7280", fontSize: 11, fontWeight: "900" },
+  resultTable: { backgroundColor: "#fff", borderRadius: 17, paddingHorizontal: 12 },
+  resultRow: { minHeight: 70, flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 8 },
+  finishBox: { minWidth: 34, height: 34, borderRadius: 10, backgroundColor: "#111827", paddingHorizontal: 5, alignItems: "center", justifyContent: "center" },
+  finishText: { color: "#fff", fontSize: 12, fontWeight: "900" },
+  resultHorseNo: { width: 38, alignItems: "center" },
+  resultHorseNoLabel: { color: "#9ca3af", fontSize: 7, fontWeight: "800" },
+  resultHorseNoValue: { color: "#111827", fontSize: 18, fontWeight: "900" },
+  resultHorseName: { color: "#111827", fontSize: 13, fontWeight: "900" },
+  resultMeta: { color: "#6b7280", fontSize: 9, fontWeight: "700", marginTop: 3 },
+  resultTimeBox: { alignItems: "flex-end", minWidth: 78 },
+  resultTime: { color: "#111827", fontSize: 12, fontWeight: "900" },
+  resultSub: { color: "#9ca3af", fontSize: 8, marginTop: 2 },
+  payoutTitle: { color: "#111827", fontSize: 18, fontWeight: "900", marginTop: 5 },
+  payoutTable: { backgroundColor: "#fff", borderRadius: 17, paddingHorizontal: 12 },
+  payoutRow: { minHeight: 48, flexDirection: "row", alignItems: "center" },
+  payoutType: { width: 70, color: "#6b7280", fontSize: 11, fontWeight: "900" },
+  payoutSelection: { flex: 1, color: "#111827", fontSize: 13, fontWeight: "900" },
+  payoutValue: { color: "#111827", fontSize: 13, fontWeight: "900" },
+  resultEmpty: { backgroundColor: "#fff", borderRadius: 18, padding: 26, alignItems: "center", gap: 7 },
+  resultEmptyTitle: { color: "#111827", fontSize: 17, fontWeight: "900", textAlign: "center" },
+  resultEmptySub: { color: "#6b7280", fontSize: 11, lineHeight: 17, textAlign: "center" },
+  resultButton: { marginTop: 9, backgroundColor: "#111827", borderRadius: 13, paddingHorizontal: 18, paddingVertical: 11 },
+  resultButtonText: { color: "#fff", fontSize: 11, fontWeight: "900" },
 });
