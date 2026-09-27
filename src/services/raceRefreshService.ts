@@ -42,6 +42,20 @@ function isTargetUrl(url: string, meetings: ScheduleMeeting[]) {
 
 async function discoverSeeds(meetings: ScheduleMeeting[], onProgress?: (p: RaceRefreshProgress) => void) {
   const seeds = new Set<string>();
+  const targetKeys = new Set(meetings.map((meeting) => meetingKey(meeting.venue, meeting.meetingNo, meeting.meetingDay)));
+  const coveredKeys = () => {
+    const keys = new Set<string>();
+    for (const url of seeds) {
+      const identity = parseJraRaceIdentity(url);
+      if (!identity) continue;
+      keys.add(meetingKey(identity.venue, identity.meetingNo, identity.meetingDay));
+    }
+    return keys;
+  };
+  const allMeetingsCovered = () => {
+    const covered = coveredKeys();
+    return [...targetKeys].every((key) => covered.has(key));
+  };
   const scanPage = async (url: string) => {
     const html = await fetchJraHtml(url);
     for (const link of discoverRaceCardLinks(html, url)) {
@@ -56,19 +70,19 @@ async function discoverSeeds(meetings: ScheduleMeeting[], onProgress?: (p: RaceR
     url.includes("/keiba/race/") || url.includes("/keiba/g1/")
   ).slice(0, 16);
 
-  for (let i = 0; i < features.length && seeds.size < meetings.length; i += 1) {
+  for (let i = 0; i < features.length && !allMeetingsCovered(); i += 1) {
     onProgress?.({ phase: "DISCOVERY", message: "正式出馬表リンクを探索", current: i + 1, total: features.length });
     try { await scanPage(features[i]); } catch {}
   }
 
-  if (seeds.size < meetings.length) {
+  if (!allMeetingsCovered()) {
     try {
       const home = await scanPage(HOME);
       const homeFeatures = home.features.filter((url) =>
         url.includes("/keiba/race/") || url.includes("/keiba/g1/")
       ).slice(0, 10);
       for (const url of homeFeatures) {
-        if (seeds.size >= meetings.length) break;
+        if (allMeetingsCovered()) break;
         try { await scanPage(url); } catch {}
       }
     } catch {}
@@ -179,7 +193,7 @@ async function refreshRaceDates(
   let pendingMeetings = 0;
   for (const meeting of meetings) {
     const key = meetingKey(meeting.venue, meeting.meetingNo, meeting.meetingDay);
-    const expected = [...(navigation.get(key) ?? new Set<number>())].sort((a,b) => a-b);
+    const expected = [...new Set(meeting.races.map((race) => race.raceNo))].sort((a,b) => a-b);
     const group = cards.get(key) ?? new Map<number, JraRaceCard>();
     if (!expected.length || !expected.every((no) => group.has(no))) {
       pendingMeetings += 1;
