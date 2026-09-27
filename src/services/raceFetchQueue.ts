@@ -18,6 +18,7 @@ export type RaceFetchStats = {
   done: number;
   failed: number;
 };
+export type RaceFetchRunState = "RUNNING" | "COMPLETED" | "PARTIAL" | "FAILED";
 
 async function statsFromDb(): Promise<RaceFetchStats> {
   const db = await getLiveDb();
@@ -51,16 +52,25 @@ export async function prepareRaceFetchRun(targetFingerprint: string) {
     statsFromDb(),
   ]);
   const sameTarget = target?.value === targetFingerprint;
-  const resume = sameTarget && stats.total > 0 && (
-    state?.value === "RUNNING" || state?.value === "FAILED" ||
-    stats.pending > 0 || stats.fetching > 0 || stats.retry > 0
-  );
+  const reusable = sameTarget && stats.total > 0;
 
-  if (resume) {
+  if (reusable) {
     await db.withTransactionAsync(async () => {
-      await db.runAsync(
-        "UPDATE race_fetch_queue SET status='PENDING',attempts=0,last_error=NULL,updated_at=CURRENT_TIMESTAMP",
-      );
+      const unfinished = stats.pending + stats.fetching + stats.retry + stats.failed;
+      if (state?.value === "COMPLETED" || unfinished === 0) {
+        // Same schedule target: reuse known formal race URLs instead of repeating
+        // the expensive discovery crawl. A completed run becomes a direct refresh.
+        await db.runAsync(
+          "UPDATE race_fetch_queue SET status='PENDING',attempts=0,last_error=NULL,updated_at=CURRENT_TIMESTAMP",
+        );
+      } else {
+        // Partial/interrupted run: preserve already verified DONE pages and retry only
+        // unfinished work.
+        await db.runAsync(
+          "UPDATE race_fetch_queue SET status='PENDING',attempts=0,last_error=NULL,updated_at=CURRENT_TIMESTAMP " +
+          "WHERE status IN ('FETCHING','RETRY','FAILED')",
+        );
+      }
       await db.runAsync(
         "INSERT INTO meta(key,value) VALUES('race_fetch_state','RUNNING') " +
         "ON CONFLICT(key) DO UPDATE SET value='RUNNING'",
@@ -178,23 +188,23 @@ export async function findRaceFetchUrl(raceDate: string, venue: string, raceNo: 
   );
 }
 
-export async function finishRaceFetchRun(ok: boolean, error?: string | null) {
+export async function finishRaceFetchRun(state: RaceFetchRunState, error?: string | null) {
   const db = await getLiveDb();
   await db.withTransactionAsync(async () => {
     await db.runAsync(
       "INSERT INTO meta(key,value) VALUES('race_fetch_state',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-      ok ? "COMPLETED" : "FAILED",
+      state,
     );
-    if (ok) {
+    if (state === "COMPLETED") {
       await db.runAsync(
         "INSERT INTO meta(key,value) VALUES('race_fetch_completed_at',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         new Date().toISOString(),
       );
       await db.runAsync("DELETE FROM meta WHERE key='race_fetch_error'");
-    } else {
+    } else if (error) {
       await db.runAsync(
         "INSERT INTO meta(key,value) VALUES('race_fetch_error',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        (error ?? "JRA正式出馬表取得に失敗").slice(0, 500),
+        error.slice(0, 500),
       );
     }
   });

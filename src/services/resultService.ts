@@ -45,6 +45,9 @@ async function fetchNetkeibaResult(race: JraRace) {
 }
 
 async function fetchJraResultFallback(race: JraRace) {
+  if (!race.sourceUrl.includes("/JRADB/accessD.html")) {
+    throw new Error("JRA正式出馬表URLが未取得");
+  }
   const raceHtml = await fetchJraHtml(race.sourceUrl);
   const action = discoverRaceResultAction(raceHtml);
   if (!action) throw new Error("JRA公式結果はまだ公開されていない");
@@ -53,9 +56,6 @@ async function fetchJraResultFallback(race: JraRace) {
 }
 
 async function refreshOfficialRaceResultImpl(race: JraRace) {
-  if (race.status !== "OFFICIAL") {
-    throw new Error("正式出馬表取得後に結果を確認できる");
-  }
   const start = raceStartEpoch(race);
   if (start != null && Date.now() < start + RESULT_SETTLE_DELAY_MS) {
     throw new Error("発走直後のため確定結果の公開を待っている");

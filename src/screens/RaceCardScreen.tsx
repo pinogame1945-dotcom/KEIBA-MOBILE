@@ -4,11 +4,11 @@ import {
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import type {
-  JraEntry, JraPayout, JraRace, JraRaceResult, OddsBetType, OddsRow,
+  JraEntry, JraPayout, JraRace, JraRaceResult, OddsBetType, OddsRow, VenueConditionSnapshot,
 } from "../domain/live";
 import { raceStartEpoch } from "../data/jra/oddsAvailability";
 import {
-  getRace, getRacePayouts, getRaceResults, getWeekEntries, listRacesForDates,
+  getRace, getRacePayouts, getRaceResults, getVenueConditionSnapshot, getWeekEntries, listRacesForDates, localTodayIso,
 } from "../repositories/liveRepository";
 import { refreshRaceState } from "../services/raceRefreshService";
 import {
@@ -160,6 +160,7 @@ export function RaceCardScreen({
   const [latestObservedAt, setLatestObservedAt] = useState<string | null>(null);
   const [results, setResults] = useState<JraRaceResult[]>([]);
   const [payouts, setPayouts] = useState<JraPayout[]>([]);
+  const [venueSnapshot, setVenueSnapshot] = useState<VenueConditionSnapshot | null>(null);
   const [raceTab, setRaceTab] = useState<RaceTab>("CARD");
   const [sortMode, setSortMode] = useState<SortMode>("HORSE_NO");
   const [selectedType, setSelectedType] = useState<OddsBetType>("WIN");
@@ -183,13 +184,14 @@ export function RaceCardScreen({
       setRace(null);
       return;
     }
-    const [nextEntries, oddsMeta, winOdds, nextResults, nextPayouts, sameDay] = await Promise.all([
+    const [nextEntries, oddsMeta, winOdds, nextResults, nextPayouts, sameDay, nextVenueSnapshot] = await Promise.all([
       getWeekEntries(raceKey),
       loadOddsMeta(raceKey),
       loadLatestWinOdds(raceKey),
       getRaceResults(raceKey),
       getRacePayouts(raceKey),
       listRacesForDates([nextRace.raceDate]),
+      getVenueConditionSnapshot(nextRace.raceDate, nextRace.venue),
     ]);
     setRace(nextRace);
     setEntries(nextEntries);
@@ -202,6 +204,7 @@ export function RaceCardScreen({
     ));
     setResults(nextResults);
     setPayouts(nextPayouts);
+    setVenueSnapshot(nextVenueSnapshot ?? null);
     setDayRaces(sameDay.filter((item) => item.venue === nextRace.venue).sort((a,b) => a.raceNo - b.raceNo));
     setSelectedType((current) =>
       oddsMeta.availableTypes.includes(current) || !oddsMeta.availableTypes.length
@@ -279,6 +282,8 @@ export function RaceCardScreen({
 
   useEffect(() => {
     if (!active || !race || race.status === "OFFICIAL" || busy || autoCardRepairRaceKey.current === race.raceKey) return;
+    const start = raceStartEpoch(race);
+    if (start != null && start <= Date.now()) return;
     autoCardRepairRaceKey.current = race.raceKey;
     setBusy("race");
     setError(null);
@@ -328,13 +333,18 @@ export function RaceCardScreen({
   const refreshCard = async () => {
     if (!race || busy) return;
     setBusy("race"); setError(null);
+    let cardError: unknown = null;
     try {
       await refreshRaceState(race);
-      await refreshTodayVenueConditions().catch(() => undefined);
-      await load();
+    } catch (e) {
+      cardError = e;
     }
-    catch (e) { setError(e instanceof Error ? e.message : String(e)); }
-    finally { setBusy(null); }
+    if (race.raceDate === localTodayIso()) {
+      await refreshTodayVenueConditions(true).catch(() => undefined);
+    }
+    await load().catch(() => undefined);
+    if (cardError) setError(cardError instanceof Error ? cardError.message : String(cardError));
+    setBusy(null);
   };
 
   const refreshOdds = async () => {
@@ -410,6 +420,20 @@ export function RaceCardScreen({
 
   const status = raceStateLabel(race, results.length > 0);
   const isFuture = (raceStartEpoch(race) ?? Infinity) > Date.now();
+  const snapshotCurrent = venueSnapshot?.sourceObservedDate === race.raceDate;
+  const snapshotTrack = snapshotCurrent && venueSnapshot
+    ? race.discipline === "OBSTACLE" || race.surface === "MIXED"
+      ? [venueSnapshot.turfCondition && "芝" + venueSnapshot.turfCondition,
+          venueSnapshot.dirtCondition && "ダ" + venueSnapshot.dirtCondition].filter(Boolean).join(" / ") || null
+      : race.surface === "DIRT"
+        ? venueSnapshot.dirtCondition
+        : venueSnapshot.turfCondition
+    : null;
+  const displayWeather = race.weather ?? (snapshotCurrent ? venueSnapshot?.weather ?? null : null);
+  const displayTrack = race.trackCondition ?? snapshotTrack;
+  const conditionMissingText = venueSnapshot?.sourceObservedDate && !snapshotCurrent
+    ? "当日値未取得（" + venueSnapshot.sourceObservedDate.slice(5).replace("-","/") + "時点）"
+    : "未取得";
 
   return (
     <SafeAreaView edges={["top"]} style={styles.safeArea}>
@@ -455,7 +479,7 @@ export function RaceCardScreen({
                 <Text style={styles.heroTitle}>{race.raceName ?? "レース名取得待ち"}</Text>
               </View>
               <Text style={styles.heroMeta}>
-                {[race.raceClass, raceCourseLabel(race), race.weather, race.trackCondition].filter(Boolean).join("　")}
+                {[race.raceClass, raceCourseLabel(race), displayWeather, displayTrack].filter(Boolean).join("　")}
               </Text>
             </View>
             <View style={styles.statusPill}><Text style={styles.statusText}>{status}</Text></View>
@@ -682,11 +706,11 @@ export function RaceCardScreen({
             <View style={styles.infoRow}><Text style={styles.infoKey}>発走</Text><Text style={styles.infoValue}>{race.startTime ?? "-"}</Text></View>
             <View style={styles.infoRow}><Text style={styles.infoKey}>条件</Text><Text style={styles.infoValue}>{race.raceClass ?? "-"}</Text></View>
             <View style={styles.infoRow}><Text style={styles.infoKey}>コース</Text><Text style={styles.infoValue}>{raceCourseLabel(race) || "-"}</Text></View>
-            <View style={styles.infoRow}><Text style={styles.infoKey}>天候</Text><Text style={styles.infoValue}>{race.weather ?? "取得待ち"}</Text></View>
-            <View style={styles.infoRow}><Text style={styles.infoKey}>馬場</Text><Text style={styles.infoValue}>{race.trackCondition ?? "取得待ち"}</Text></View>
+            <View style={styles.infoRow}><Text style={styles.infoKey}>天候</Text><Text style={styles.infoValue}>{displayWeather ?? conditionMissingText}</Text></View>
+            <View style={styles.infoRow}><Text style={styles.infoKey}>馬場</Text><Text style={styles.infoValue}>{displayTrack ?? conditionMissingText}</Text></View>
             <View style={styles.infoRow}><Text style={styles.infoKey}>出走</Text><Text style={styles.infoValue}>{entries.filter((entry) => entry.entryStatus === "ACTIVE").length || "-"}頭</Text></View>
-            <TouchableOpacity style={styles.cardRefresh} onPress={() => void refreshCard()} disabled={busy != null || race.status !== "OFFICIAL"}>
-              <Text style={styles.cardRefreshText}>{busy === "race" ? "更新中" : "出馬表・馬場状態を更新 ↻"}</Text>
+            <TouchableOpacity style={styles.cardRefresh} onPress={() => void refreshCard()} disabled={busy != null}>
+              <Text style={styles.cardRefreshText}>{busy === "race" ? "更新中" : race.raceDate === localTodayIso() ? "出馬表・現在馬場を更新 ↻" : "出馬表を更新 ↻"}</Text>
             </TouchableOpacity>
           </View>
         ) : null}

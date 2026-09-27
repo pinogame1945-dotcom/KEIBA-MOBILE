@@ -80,6 +80,19 @@ CREATE TABLE IF NOT EXISTS race_fetch_queue (
 CREATE INDEX IF NOT EXISTS idx_race_fetch_queue_target_status
   ON race_fetch_queue(target_fingerprint,status,race_date,venue,race_no);
 
+CREATE TABLE IF NOT EXISTS venue_conditions (
+  race_date TEXT NOT NULL,
+  venue TEXT NOT NULL,
+  weather TEXT,
+  turf_condition TEXT,
+  dirt_condition TEXT,
+  source_observed_label TEXT,
+  source_observed_date TEXT,
+  fetched_at TEXT NOT NULL,
+  source_url TEXT NOT NULL,
+  PRIMARY KEY (race_date, venue)
+);
+
 CREATE TABLE IF NOT EXISTS odds_current (
   race_key TEXT NOT NULL,
   bet_type TEXT NOT NULL,
