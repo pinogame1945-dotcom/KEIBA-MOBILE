@@ -1,2 +1,2 @@
-APK build requested from d41dfe3b4af2028c8e324657d8f8e0504abe8492
-Requested after LIVE bug fixes and unique artifact naming on 2026-09-27
+APK build requested from a6d06455ac39f10a5f6adf1ed21c72d362ab4a1e
+Requested after result-condition recovery v2 on 2026-09-27
