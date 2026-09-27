@@ -114,6 +114,7 @@ CREATE TABLE IF NOT EXISTS race_results (
   finish_time TEXT,
   margin TEXT,
   last_3f REAL,
+  average_1f REAL,
   popularity INTEGER,
   result_status TEXT NOT NULL,
   observed_at TEXT NOT NULL,
@@ -141,6 +142,10 @@ export async function getLiveDb() {
   if (!dbPromise) {
     dbPromise = openDatabaseAsync("keiba-mobile-live.db").then(async (db) => {
       await db.execAsync(SCHEMA);
+      const resultColumns = await db.getAllAsync<{ name: string }>("PRAGMA table_info(race_results)");
+      if (!resultColumns.some((column) => column.name === "average_1f")) {
+        await db.execAsync("ALTER TABLE race_results ADD COLUMN average_1f REAL");
+      }
       return db;
     });
   }
