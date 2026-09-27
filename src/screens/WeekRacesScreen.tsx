@@ -75,9 +75,10 @@ export function WeekRacesScreen({
     try {
       await refreshScheduleTarget(true);
       await load();
-      await refreshTodayVenueConditions(true).catch(() => undefined);
-      await load();
-      await refreshCurrentWeekRaceData(setProgress, async () => { await load(); });
+      await Promise.allSettled([
+        refreshTodayVenueConditions(true).then(() => load()),
+        refreshCurrentWeekRaceData(setProgress, async () => { await load(); }),
+      ]);
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
