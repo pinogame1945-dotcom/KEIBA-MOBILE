@@ -320,6 +320,23 @@ export async function setWeekMeta(key: string, value: string) {
 }
 
 
+const FINAL_ODDS_META_PREFIX = "odds_final_confirmed:";
+const FINAL_ODDS_PROBE_META_PREFIX = "odds_final_probe:";
+
+export function getFinalOddsConfirmedAt(raceKey: string) {
+  return getWeekMeta(FINAL_ODDS_META_PREFIX + raceKey);
+}
+export function markFinalOddsConfirmed(raceKey: string, observedAt: string) {
+  return setWeekMeta(FINAL_ODDS_META_PREFIX + raceKey, observedAt);
+}
+export function getFinalOddsProbeAt(raceKey: string) {
+  return getWeekMeta(FINAL_ODDS_PROBE_META_PREFIX + raceKey);
+}
+export function markFinalOddsProbe(raceKey: string, observedAt: string) {
+  return setWeekMeta(FINAL_ODDS_PROBE_META_PREFIX + raceKey, observedAt);
+}
+
+
 export async function saveVenueConditionSnapshot(snapshot: VenueConditionSnapshot) {
   await withLiveDbTransaction(async (db) => {
   const previous = await db.getFirstAsync<{
