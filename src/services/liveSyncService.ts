@@ -67,14 +67,32 @@ async function refreshIncompleteResults(onMutation?:()=>void){
     })
     .sort((a,b)=>(raceStartEpoch(b)??0)-(raceStartEpoch(a)??0));
   let refreshed=0;
+  const conditionRepairs:typeof races=[];
   for(const race of candidates){
     const completeness=await getRaceResultCompleteness(race.raceKey);
-    if(completeness.resultReady)continue;
+    if(completeness.resultReady){
+      if(!completeness.conditionsComplete)conditionRepairs.push(race);
+      continue;
+    }
+    if(refreshed>=4)continue;
     try{
       await refreshOfficialRaceResult(race);
       onMutation?.();
       refreshed+=1;
-      if(refreshed>=4)break;
+    }catch{}
+  }
+
+  let repairedConditions=0;
+  for(const race of conditionRepairs){
+    if(repairedConditions>=2)break;
+    const key="condition_repair_attempt:"+race.raceKey;
+    const last=parsedTime(await getWeekMeta(key));
+    if(last&&now-last<30*60*1000)continue;
+    await setWeekMeta(key,new Date(now).toISOString());
+    try{
+      await refreshOfficialRaceResult(race);
+      onMutation?.();
+      repairedConditions+=1;
     }catch{}
   }
 }
