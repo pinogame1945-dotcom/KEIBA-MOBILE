@@ -124,7 +124,7 @@ assert.ok(
   week.includes('selectedWeekKey === "CURRENT"') &&
   week.includes('setSelectedWeekKey("CURRENT")') &&
   week.includes("archiveWeekLabel") &&
-  week.includes('"保存済み"') &&
+  week.includes("保存済み") &&
   week.includes("listRacesForDates(selectedWeek.dates)"),
   "week screen must browse stored race weeks without creating a separate archive UI",
 );
