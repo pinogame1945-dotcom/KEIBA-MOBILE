@@ -1,2 +1,2 @@
-APK build requested from 7dec2aaadefb84eebc77a864f4e6649148a8199b
-Requested after compact meeting switcher and JRA result-condition fix on 2026-09-27
+APK build requested from af7acd75f76f8409a5038692bf09055953b23c88
+Requested after RESULT ARCHIVE v1 merge and successful main CI #117 on 2026-09-28 JST
