@@ -29,6 +29,8 @@ jobs:
         run: npm run live-ui:contract
       - name: Reschedule contract
         run: npm run reschedule:contract
+      - name: Result archive contract
+        run: npm run result-archive:contract
       - name: Reschedule runtime regression
         run: npm run smoke:reschedule
       - name: JRA schedule disruption regression
