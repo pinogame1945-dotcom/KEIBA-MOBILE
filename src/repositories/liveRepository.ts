@@ -1,3 +1,4 @@
+import { assertResultMatchesStoredEntries } from "../domain/resultArchiveGuard";
 import type {
   JraEntry, JraPayout, JraRace, JraRaceCard, JraRaceResult, OddsBetType, OddsRow, RaceNotice, ScheduleMeeting,
   ScheduleTarget, VenueConditionSnapshot,
@@ -874,9 +875,31 @@ export async function getRacePayouts(raceKey: string) {
 export async function listRaceKeysWithResults(dates: string[]) {
   if (!dates.length) return [] as string[];
   const db = await getLiveDb();
-  const rows = await db.getAllAsync<{ raceKey: string }>("SELECT DISTINCT race_key AS raceKey FROM race_results");
-  const prefixes = dates.map((date) => "JRA:" + date + ":");
-  return rows.map((row) => row.raceKey).filter((key) => prefixes.some((prefix) => key.startsWith(prefix)));
+  const placeholders=dates.map(()=>"?").join(",");
+  const rows = await db.getAllAsync<{ raceKey: string }>(
+    `SELECT DISTINCT rr.race_key AS raceKey
+     FROM race_results rr
+     JOIN races r ON r.race_key=rr.race_key
+     WHERE r.race_date IN (${placeholders})`,
+    ...dates,
+  );
+  return rows.map((row) => row.raceKey);
+}
+
+export async function listIncompleteArchiveRaces(limit=48){
+  const db=await getLiveDb();
+  const safeLimit=Math.max(1,Math.min(200,Math.floor(limit)));
+  return db.getAllAsync<JraRace>(
+    `SELECT ${raceSelect()}
+     FROM races
+     LEFT JOIN race_archive_state a ON a.race_key=races.race_key
+     WHERE races.schedule_status='ACTIVE'
+       AND races.race_status NOT IN ('CANCELLED','ABANDONED')
+       AND COALESCE(a.archive_state,'LIVE')<>'READY'
+     ORDER BY races.race_date DESC,races.venue,races.race_no DESC
+     LIMIT ?`,
+    safeLimit,
+  );
 }
 
 export async function getRaceResultCompleteness(raceKey: string) {
@@ -953,6 +976,17 @@ export async function saveOfficialRaceResult(
   if (!results.length) throw new Error("公式結果が空のため保存しない");
   const observedAt = new Date().toISOString();
   await withLiveDbTransaction(async (db) => {
+    const storedEntries=await db.getAllAsync<JraEntry>(
+      `SELECT race_key AS raceKey,canonical_horse_id AS canonicalHorseId,gate,horse_no AS horseNo,
+        horse_name AS horseName,entry_status AS entryStatus,sex,age,coat_color AS coatColor,
+        carried_weight AS carriedWeight,jockey_name AS jockeyName,trainer_name AS trainerName,
+        body_weight AS bodyWeight,body_weight_diff AS bodyWeightDiff,win_odds AS winOdds,popularity,
+        sire,dam,damsire
+       FROM entries WHERE race_key=? ORDER BY horse_no`,
+      race.raceKey,
+    );
+    assertResultMatchesStoredEntries(storedEntries,results);
+
     const [existingResults,existingPayouts] = await Promise.all([
       db.getFirstAsync<{ count: number }>("SELECT COUNT(*) AS count FROM race_results WHERE race_key=?",race.raceKey),
       db.getFirstAsync<{ count: number }>("SELECT COUNT(*) AS count FROM payouts WHERE race_key=?",race.raceKey),
