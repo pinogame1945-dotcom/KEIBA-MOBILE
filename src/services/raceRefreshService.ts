@@ -237,10 +237,12 @@ export async function refreshRaceState(race: JraRace) {
 
 function dueIntervalMs(race: JraRace, nowMs: number) {
   const start = raceStartEpoch(race);
-  if (start == null) return 60 * 60 * 1000;
+  if (start == null) return 30 * 60 * 1000;
   const remaining = start - nowMs;
   if (remaining <= 0) return Number.POSITIVE_INFINITY;
-  return remaining <= 3 * 60 * 60 * 1000 ? 20 * 60 * 1000 : 60 * 60 * 1000;
+  if (remaining <= 60 * 60 * 1000) return 3 * 60 * 1000;
+  if (remaining <= 3 * 60 * 60 * 1000) return 10 * 60 * 1000;
+  return 30 * 60 * 1000;
 }
 
 let dueSweep: Promise<void> | null = null;
@@ -256,7 +258,7 @@ export function refreshDueRaceStates() {
       const fetchedAt = Date.parse(race.fetchedAt);
       return !Number.isFinite(fetchedAt) || now - fetchedAt >= dueIntervalMs(race, now);
     });
-    for (const race of candidates) {
+    for (const race of candidates.slice(0, 2)) {
       try { await refreshRaceState(race); } catch {}
     }
   })().finally(() => { dueSweep = null; });
