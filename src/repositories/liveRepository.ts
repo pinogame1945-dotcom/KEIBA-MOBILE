@@ -1,3 +1,5 @@
+import { groupStoredRaceWeeks, type StoredRaceWeek } from "../domain/raceArchiveWeeks";
+import { assertResultMatchesStoredEntries } from "../domain/resultArchiveGuard";
 import type {
   JraEntry, JraPayout, JraRace, JraRaceCard, JraRaceResult, OddsBetType, OddsRow, RaceNotice, ScheduleMeeting,
   ScheduleTarget, VenueConditionSnapshot,
@@ -447,6 +449,41 @@ export async function listRacesForDates(dates: string[]) {
     .sort((a,b) => a.raceDate.localeCompare(b.raceDate) || a.venue.localeCompare(b.venue,"ja") || a.raceNo - b.raceNo);
 }
 
+export async function listStoredRaceWeeks():Promise<StoredRaceWeek[]>{
+  const db=await getLiveDb();
+  const rows=await db.getAllAsync<{
+    raceDate:string;
+    raceCount:number;
+    resultCount:number;
+  }>(
+    `SELECT r.race_date AS raceDate,
+       COUNT(*) AS raceCount,
+       SUM(CASE WHEN EXISTS(
+         SELECT 1 FROM race_results rr WHERE rr.race_key=r.race_key
+       ) THEN 1 ELSE 0 END) AS resultCount
+     FROM races r
+     WHERE r.schedule_status='ACTIVE'
+       AND (r.status='OFFICIAL' OR r.race_status='COMPLETED')
+     GROUP BY r.race_date
+     ORDER BY r.race_date`,
+  );
+  return groupStoredRaceWeeks(rows.map(row=>({
+    raceDate:row.raceDate,
+    raceCount:Number(row.raceCount??0),
+    resultCount:Number(row.resultCount??0),
+  })));
+}
+
+export async function listRaceNavigationGroup(raceDate:string){
+  const target=await getScheduleTarget();
+  if(target?.dates?.includes(raceDate))return listRacingWeekRaces();
+
+  const week=(await listStoredRaceWeeks()).find(item=>item.dates.includes(raceDate));
+  if(week)return listRacesForDates(week.dates);
+
+  return listRacesForDates([raceDate]);
+}
+
 export async function listTodayRaces() {
   return listRacesForDates([localTodayIso()]);
 }
@@ -538,11 +575,115 @@ export async function setWeekMeta(key: string, value: string) {
 const FINAL_ODDS_META_PREFIX = "odds_final_confirmed:";
 const FINAL_ODDS_PROBE_META_PREFIX = "odds_final_probe:";
 
+export type RaceArchiveState = {
+  raceKey: string;
+  canonicalRaceId: string | null;
+  resultReady: boolean;
+  payoutReady: boolean;
+  finalOddsReady: boolean;
+  conditionsReady: boolean;
+  archiveState: "LIVE" | "INCOMPLETE" | "READY";
+  archivedAt: string | null;
+  updatedAt: string;
+};
+
+export type ResultProvenanceInput = {
+  source: string;
+  sourceUrl: string | null;
+  parserVersion: number;
+  fetchedAt?: string;
+};
+
+async function recomputeRaceArchiveState(
+  db: Awaited<ReturnType<typeof getLiveDb>>,
+  raceKey: string,
+) {
+  const [result,payout,race,finalOdds,existing] = await Promise.all([
+    db.getFirstAsync<{count:number}>("SELECT COUNT(*) AS count FROM race_results WHERE race_key=?",raceKey),
+    db.getFirstAsync<{count:number}>("SELECT COUNT(*) AS count FROM payouts WHERE race_key=?",raceKey),
+    db.getFirstAsync<{
+      canonicalRaceId:string|null;raceStatus:string;weather:string|null;trackCondition:string|null;
+    }>(
+      `SELECT canonical_race_id AS canonicalRaceId,race_status AS raceStatus,
+         weather,track_condition AS trackCondition
+       FROM races WHERE race_key=?`,
+      raceKey,
+    ),
+    db.getFirstAsync<{value:string}>("SELECT value FROM meta WHERE key=?",FINAL_ODDS_META_PREFIX+raceKey),
+    db.getFirstAsync<{archivedAt:string|null}>(
+      "SELECT archived_at AS archivedAt FROM race_archive_state WHERE race_key=?",
+      raceKey,
+    ),
+  ]);
+  if (!race) return;
+
+  const resultReady=Number(result?.count??0)>0;
+  const payoutReady=Number(payout?.count??0)>0;
+  const finalOddsReady=Boolean(finalOdds?.value);
+  const conditionsReady=Boolean(race.weather&&race.trackCondition);
+  const ready=resultReady&&payoutReady&&finalOddsReady&&conditionsReady;
+  const archiveState:RaceArchiveState["archiveState"]=ready
+    ?"READY"
+    :race.raceStatus==="COMPLETED"
+      ?"INCOMPLETE"
+      :"LIVE";
+  const now=new Date().toISOString();
+  const archivedAt=ready?(existing?.archivedAt??now):null;
+
+  await db.runAsync(
+    `INSERT INTO race_archive_state(
+       race_key,canonical_race_id,result_ready,payout_ready,final_odds_ready,
+       conditions_ready,archive_state,archived_at,updated_at
+     ) VALUES(?,?,?,?,?,?,?,?,?)
+     ON CONFLICT(race_key) DO UPDATE SET
+       canonical_race_id=excluded.canonical_race_id,
+       result_ready=excluded.result_ready,
+       payout_ready=excluded.payout_ready,
+       final_odds_ready=excluded.final_odds_ready,
+       conditions_ready=excluded.conditions_ready,
+       archive_state=excluded.archive_state,
+       archived_at=excluded.archived_at,
+       updated_at=excluded.updated_at`,
+    raceKey,race.canonicalRaceId,
+    resultReady?1:0,payoutReady?1:0,finalOddsReady?1:0,conditionsReady?1:0,
+    archiveState,archivedAt,now,
+  );
+}
+
+export async function getRaceArchiveState(raceKey:string):Promise<RaceArchiveState|null>{
+  const db=await getLiveDb();
+  const row=await db.getFirstAsync<{
+    raceKey:string;canonicalRaceId:string|null;resultReady:number;payoutReady:number;
+    finalOddsReady:number;conditionsReady:number;archiveState:"LIVE"|"INCOMPLETE"|"READY";
+    archivedAt:string|null;updatedAt:string;
+  }>(
+    `SELECT race_key AS raceKey,canonical_race_id AS canonicalRaceId,
+       result_ready AS resultReady,payout_ready AS payoutReady,
+       final_odds_ready AS finalOddsReady,conditions_ready AS conditionsReady,
+       archive_state AS archiveState,archived_at AS archivedAt,updated_at AS updatedAt
+     FROM race_archive_state WHERE race_key=?`,
+    raceKey,
+  );
+  return row?{
+    ...row,
+    resultReady:Boolean(row.resultReady),
+    payoutReady:Boolean(row.payoutReady),
+    finalOddsReady:Boolean(row.finalOddsReady),
+    conditionsReady:Boolean(row.conditionsReady),
+  }:null;
+}
+
 export function getFinalOddsConfirmedAt(raceKey: string) {
   return getWeekMeta(FINAL_ODDS_META_PREFIX + raceKey);
 }
-export function markFinalOddsConfirmed(raceKey: string, observedAt: string) {
-  return setWeekMeta(FINAL_ODDS_META_PREFIX + raceKey, observedAt);
+export async function markFinalOddsConfirmed(raceKey: string, observedAt: string) {
+  await withLiveDbTransaction(async db=>{
+    await db.runAsync(
+      "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+      FINAL_ODDS_META_PREFIX+raceKey,observedAt,
+    );
+    await recomputeRaceArchiveState(db,raceKey);
+  });
 }
 export function getFinalOddsProbeAt(raceKey: string) {
   return getWeekMeta(FINAL_ODDS_PROBE_META_PREFIX + raceKey);
@@ -770,9 +911,32 @@ export async function getRacePayouts(raceKey: string) {
 export async function listRaceKeysWithResults(dates: string[]) {
   if (!dates.length) return [] as string[];
   const db = await getLiveDb();
-  const rows = await db.getAllAsync<{ raceKey: string }>("SELECT DISTINCT race_key AS raceKey FROM race_results");
-  const prefixes = dates.map((date) => "JRA:" + date + ":");
-  return rows.map((row) => row.raceKey).filter((key) => prefixes.some((prefix) => key.startsWith(prefix)));
+  const placeholders=dates.map(()=>"?").join(",");
+  const rows = await db.getAllAsync<{ raceKey: string }>(
+    `SELECT DISTINCT rr.race_key AS raceKey
+     FROM race_results rr
+     JOIN races r ON r.race_key=rr.race_key
+     WHERE r.race_date IN (${placeholders})`,
+    ...dates,
+  );
+  return rows.map((row) => row.raceKey);
+}
+
+export async function listIncompleteArchiveRaces(limit=48){
+  const db=await getLiveDb();
+  const safeLimit=Math.max(1,Math.min(200,Math.floor(limit)));
+  return db.getAllAsync<JraRace>(
+    `SELECT ${raceSelect()}
+     FROM races
+     WHERE races.schedule_status='ACTIVE'
+       AND races.race_status NOT IN ('CANCELLED','ABANDONED')
+       AND COALESCE((
+         SELECT a.archive_state FROM race_archive_state a WHERE a.race_key=races.race_key
+       ),'LIVE')<>'READY'
+     ORDER BY races.race_date DESC,races.venue,races.race_no DESC
+     LIMIT ?`,
+    safeLimit,
+  );
 }
 
 export async function getRaceResultCompleteness(raceKey: string) {
@@ -804,6 +968,31 @@ export type OfficialRaceConditions = {
   dirtCondition: string | null;
 };
 
+function resultFingerprint(
+  results:JraRaceResult[],
+  payouts:JraPayout[],
+  conditions:OfficialRaceConditions|undefined,
+){
+  const canonical=JSON.stringify({
+    results:[...results]
+      .sort((a,b)=>(a.horseNo??999)-(b.horseNo??999)||a.horseName.localeCompare(b.horseName,"ja"))
+      .map(row=>[
+        row.horseNo,row.horseName,row.finishPosition,row.finishRaw,row.finishTime,row.margin,
+        row.last3f,row.average1f,row.popularity,row.resultStatus,
+      ]),
+    payouts:[...payouts]
+      .sort((a,b)=>a.betType.localeCompare(b.betType)||a.selection.localeCompare(b.selection))
+      .map(row=>[row.betType,row.selection,row.payoutYen,row.popularity]),
+    conditions:conditions??null,
+  });
+  let hash=0x811c9dc5;
+  for(let i=0;i<canonical.length;i++){
+    hash^=canonical.charCodeAt(i);
+    hash=Math.imul(hash,0x01000193);
+  }
+  return "fnv1a32:"+((hash>>>0).toString(16).padStart(8,"0"));
+}
+
 function conditionForRace(race: JraRace, conditions: OfficialRaceConditions) {
   if (race.discipline === "OBSTACLE" || race.surface === "MIXED") {
     if (conditions.turfCondition && conditions.dirtCondition && conditions.turfCondition !== conditions.dirtCondition) {
@@ -819,10 +1008,22 @@ export async function saveOfficialRaceResult(
   results: JraRaceResult[],
   payouts: JraPayout[],
   conditions?: OfficialRaceConditions,
+  provenance?: ResultProvenanceInput,
 ) {
   if (!results.length) throw new Error("公式結果が空のため保存しない");
   const observedAt = new Date().toISOString();
   await withLiveDbTransaction(async (db) => {
+    const storedEntries=await db.getAllAsync<JraEntry>(
+      `SELECT race_key AS raceKey,canonical_horse_id AS canonicalHorseId,gate,horse_no AS horseNo,
+        horse_name AS horseName,entry_status AS entryStatus,sex,age,coat_color AS coatColor,
+        carried_weight AS carriedWeight,jockey_name AS jockeyName,trainer_name AS trainerName,
+        body_weight AS bodyWeight,body_weight_diff AS bodyWeightDiff,win_odds AS winOdds,popularity,
+        sire,dam,damsire
+       FROM entries WHERE race_key=? ORDER BY horse_no`,
+      race.raceKey,
+    );
+    assertResultMatchesStoredEntries(storedEntries,results);
+
     const [existingResults,existingPayouts] = await Promise.all([
       db.getFirstAsync<{ count: number }>("SELECT COUNT(*) AS count FROM race_results WHERE race_key=?",race.raceKey),
       db.getFirstAsync<{ count: number }>("SELECT COUNT(*) AS count FROM payouts WHERE race_key=?",race.raceKey),
@@ -876,5 +1077,22 @@ export async function saveOfficialRaceResult(
         conditions.weather,nextTrack,race.raceKey,
       );
     }
+
+    const storedConditions=await db.getFirstAsync<{weather:string|null;trackCondition:string|null}>(
+      "SELECT weather,track_condition AS trackCondition FROM races WHERE race_key=?",
+      race.raceKey,
+    );
+    const conditionsComplete=Boolean(storedConditions?.weather&&storedConditions?.trackCondition);
+    const provenanceAt=provenance?.fetchedAt??observedAt;
+    await db.runAsync(
+      `INSERT OR IGNORE INTO result_provenance(
+         race_key,source,source_url,parser_version,result_fingerprint,fetched_at,
+         result_count,payout_count,conditions_complete
+       ) VALUES(?,?,?,?,?,?,?,?,?)`,
+      race.raceKey,provenance?.source??"UNKNOWN",provenance?.sourceUrl??race.sourceUrl,
+      provenance?.parserVersion??0,resultFingerprint(results,payouts,conditions),provenanceAt,
+      results.length,payouts.length,conditionsComplete?1:0,
+    );
+    await recomputeRaceArchiveState(db,race.raceKey);
   });
 }

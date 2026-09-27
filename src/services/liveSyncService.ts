@@ -1,7 +1,7 @@
 import { raceStartEpoch } from "../data/jra/oddsAvailability";
 import {
   getFinalOddsConfirmedAt,getFinalOddsProbeAt,getOddsAvailability,getRace,getRaceResultCompleteness,
-  getWeekEntries,getWeekMeta,listRacingWeekRaces,localTodayIso,setWeekMeta,
+  getWeekEntries,getWeekMeta,listIncompleteArchiveRaces,listRacingWeekRaces,localTodayIso,setWeekMeta,
 } from "../repositories/liveRepository";
 import { refreshLatestOdds } from "./oddsService";
 import { refreshCurrentWeekRaceData,refreshKnownRaceStates,refreshRaceState } from "./raceRefreshService";
@@ -120,6 +120,48 @@ async function refreshIncompletePayouts(){
   }
 }
 
+async function refreshArchiveBacklog(){
+  const [currentWeek,backlog]=await Promise.all([
+    listRacingWeekRaces(),
+    listIncompleteArchiveRaces(64),
+  ]);
+  const currentKeys=new Set(currentWeek.map(race=>race.raceKey));
+  const now=Date.now();
+
+  const candidates=backlog
+    .filter(race=>!currentKeys.has(race.raceKey))
+    .filter(race=>race.scheduleStatus==="ACTIVE"&&race.raceStatus!=="CANCELLED"&&race.raceStatus!=="ABANDONED")
+    .filter(race=>{
+      const start=raceStartEpoch(race);
+      return start!=null&&start+15*60*1000<=now;
+    })
+    .sort((a,b)=>(raceStartEpoch(b)??0)-(raceStartEpoch(a)??0));
+
+  for(const race of candidates){
+    const state=await getRaceResultCompleteness(race.raceKey);
+
+    if(!state.resultReady||!state.conditionsComplete||!state.payoutReady){
+      const key="archive_result_repair_attempt:"+race.raceKey;
+      const last=parsedTime(await getWeekMeta(key));
+      if(last&&now-last<30*60*1000)continue;
+      await setWeekMeta(key,new Date(now).toISOString());
+      await refreshOfficialRaceResult(race).catch(()=>undefined);
+      return;
+    }
+
+    if(!await getFinalOddsConfirmedAt(race.raceKey)){
+      const key="archive_odds_repair_attempt:"+race.raceKey;
+      const last=parsedTime(await getWeekMeta(key));
+      if(last&&now-last<60*60*1000)continue;
+      const entries=await getWeekEntries(race.raceKey);
+      if(!entries.length)continue;
+      await setWeekMeta(key,new Date(now).toISOString());
+      await refreshLatestOdds(race,entries).catch(()=>undefined);
+      return;
+    }
+  }
+}
+
 async function refreshDueOdds(){
   const races=await listRacingWeekRaces();
   const now=Date.now(),today=localTodayIso();
@@ -168,6 +210,7 @@ export function syncLiveCache(onMutation?:()=>void){
       refreshIncompleteResults(onMutation),
       refreshIncompletePayouts(),
       refreshDueOdds(),
+      refreshArchiveBacklog(),
     ]);
   })().finally(()=>{syncPromise=null;});
   return syncPromise;
