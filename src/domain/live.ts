@@ -124,6 +124,7 @@ export type JraRaceResult = {
   finishTime: string | null;
   margin: string | null;
   last3f: number | null;
+  average1f: number | null;
   popularity: number | null;
   resultStatus: "FINISHED" | "SCRATCHED" | "EXCLUDED" | "DISQUALIFIED" | "DNF" | "UNKNOWN";
 };
