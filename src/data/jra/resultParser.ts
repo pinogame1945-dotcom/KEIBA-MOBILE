@@ -1,5 +1,6 @@
 import { load, type CheerioAPI } from "cheerio";
-import type { JraPayout, JraRaceResult, OddsBetType } from "../../domain/live";
+import type { JraPayout, JraRace, JraRaceResult, OddsBetType } from "../../domain/live";
+import type { OfficialRaceConditions } from "../../repositories/liveRepository";
 
 export type JraAction = { path: string; cname: string };
 
@@ -47,9 +48,7 @@ export function discoverRaceResultAction(html: string): JraAction | null {
   const $ = load(html);
   let found: JraAction | null = null;
   $("a[onclick]").each((_, el) => {
-    if (found) return;
-    const label = compact($(el).text());
-    if (!label.includes("レース結果")) return;
+    if (found || !compact($(el).text()).includes("レース結果")) return;
     const action = parseAction($(el).attr("onclick"));
     if (action) found = action;
   });
@@ -65,7 +64,7 @@ function findResultTable($: CheerioAPI) {
   $("table").each((_, el) => {
     if (table) return;
     const text = compact($(el).text());
-    if (text.includes("着順") && text.includes("馬番") && text.includes("タイム") && text.includes("推定上り")) {
+    if (text.includes("着順") && text.includes("馬番") && text.includes("馬名") && text.includes("タイム")) {
       table = el;
     }
   });
@@ -104,8 +103,32 @@ function valueAt(values: string[], index: number) {
   return values.length === 1 ? values[0] ?? null : null;
 }
 
-export function parseJraRaceResultPage(html: string, raceKey: string) {
+function assertIdentity(pageText: string, race: JraRace) {
+  const [y,m,d] = race.raceDate.split("-").map(Number);
+  if (!pageText.includes(`${y}年${m}月${d}日`)) {
+    throw new Error("JRA結果ページの日付が対象レースと一致しない");
+  }
+  if (!new RegExp("\\d+回" + race.venue + "\\d+日").test(pageText)) {
+    throw new Error("JRA結果ページの競馬場が対象レースと一致しない");
+  }
+  if (!new RegExp("(?:^|\\s)" + race.raceNo + "レース(?:\\s|$)").test(pageText)) {
+    throw new Error("JRA結果ページのレース番号が対象レースと一致しない");
+  }
+}
+
+function parseConditions(pageText: string): OfficialRaceConditions {
+  return {
+    weather: pageText.match(/天候\s*(晴|曇|雨|小雨|雪|小雪)/)?.[1] ?? null,
+    turfCondition: pageText.match(/芝\s*(良|稍重|重|不良)/)?.[1] ?? null,
+    dirtCondition: pageText.match(/ダート\s*(良|稍重|重|不良)/)?.[1] ?? null,
+  };
+}
+
+export function parseJraRaceResultPage(html: string, race: JraRace) {
   const $ = load(html);
+  const pageText = clean($.root().text());
+  assertIdentity(pageText, race);
+
   const table = findResultTable($);
   if (!table) throw new Error("JRAレース結果表を確認できない");
 
@@ -116,19 +139,23 @@ export function parseJraRaceResultPage(html: string, raceKey: string) {
   if (!headerRow) throw new Error("JRAレース結果の列見出しを確認できない");
 
   const headers = directCells($, headerRow).toArray().map((cell) => compact($(cell).text()));
-  const findIndex = (patterns: RegExp[], fallback: number) => {
-    const index = headers.findIndex((header) => patterns.some((pattern) => pattern.test(header)));
-    return index >= 0 ? index : fallback;
-  };
+  const findIndex = (patterns: RegExp[]) =>
+    headers.findIndex((header) => patterns.some((pattern) => pattern.test(header)));
+
   const idx = {
-    finish: findIndex([/^着順$/], 0),
-    number: findIndex([/^馬番$/], 2),
-    horse: findIndex([/^馬名/], 3),
-    time: findIndex([/^タイム$/], 7),
-    margin: findIndex([/^着差$/], 8),
-    last3f: findIndex([/推定上り/, /上がり/, /上り/], 10),
-    popularity: findIndex([/単勝人気/, /^人気$/], 13),
+    finish: findIndex([/^着順$/]),
+    number: findIndex([/^馬番$/]),
+    horse: findIndex([/^馬名/]),
+    time: findIndex([/^タイム$/]),
+    margin: findIndex([/^着差$/]),
+    last3f: findIndex([/推定上り/, /上がり3F/, /^上り$/]),
+    average1f: findIndex([/平均1F/]),
+    popularity: findIndex([/単勝人気/, /^人気$/]),
   };
+
+  if (idx.finish < 0 || idx.number < 0 || idx.horse < 0 || idx.time < 0) {
+    throw new Error("JRAレース結果の必須列を確認できない");
+  }
 
   const results: JraRaceResult[] = [];
   $(table).find("tr").each((_, row) => {
@@ -139,24 +166,23 @@ export function parseJraRaceResultPage(html: string, raceKey: string) {
     const finishRaw = clean(cells.eq(idx.finish).text());
     const horseNo = intOrNull(cells.eq(idx.number).text());
     const horseCell = cells.eq(idx.horse);
-    const linkedName = clean(horseCell.find("a[href]").first().text());
-    const horseName = linkedName || clean(horseCell.text())
-      .replace(/ブリンカー着用/g, "")
-      .replace(/外/g, "")
-      .trim();
+    const linkedName = clean(horseCell.find("a[href],a[onclick]").first().text());
+    const horseName = linkedName ||
+      clean(horseCell.text()).replace(/ブリンカー着用/g, "").replace(/外/g, "").trim();
+
     if (!finishRaw || !horseName) return;
 
-    const position = /^\d+$/.test(compact(finishRaw)) ? intOrNull(finishRaw) : null;
     results.push({
-      raceKey,
-      finishPosition: position,
+      raceKey: race.raceKey,
+      finishPosition: /^\d+$/.test(compact(finishRaw)) ? intOrNull(finishRaw) : null,
       finishRaw,
       horseNo,
       horseName,
       finishTime: clean(cells.eq(idx.time).text()) || null,
-      margin: clean(cells.eq(idx.margin).text()) || null,
-      last3f: floatOrNull(cells.eq(idx.last3f).text()),
-      popularity: intOrNull(cells.eq(idx.popularity).text()),
+      margin: idx.margin >= 0 ? clean(cells.eq(idx.margin).text()) || null : null,
+      last3f: idx.last3f >= 0 ? floatOrNull(cells.eq(idx.last3f).text()) : null,
+      average1f: idx.average1f >= 0 ? floatOrNull(cells.eq(idx.average1f).text()) : null,
+      popularity: idx.popularity >= 0 ? intOrNull(cells.eq(idx.popularity).text()) : null,
       resultStatus: resultStatus(finishRaw),
     });
   });
@@ -169,20 +195,21 @@ export function parseJraRaceResultPage(html: string, raceKey: string) {
   $("tr").each((_, row) => {
     const cells = directCells($, row);
     if (cells.length < 3) return;
-    const label = compact(cells.eq(0).text());
-    const betType = BET_MAP[label];
+
+    const betType = BET_MAP[compact(cells.eq(0).text())];
     if (!betType) return;
 
     const selections = splitCellLines($, cells.eq(1));
     const amounts = splitCellLines($, cells.eq(2));
     const popularities = cells.length >= 4 ? splitCellLines($, cells.eq(3)) : [];
     const count = Math.max(selections.length, amounts.length);
+
     for (let i = 0; i < count; i += 1) {
       const selection = valueAt(selections, i);
       const amount = valueAt(amounts, i);
       if (!selection || !amount) continue;
       payouts.push({
-        raceKey,
+        raceKey: race.raceKey,
         betType,
         selection: compact(selection).replace(/[－ー]/g, "-"),
         payoutYen: intOrNull(amount),
@@ -191,5 +218,9 @@ export function parseJraRaceResultPage(html: string, raceKey: string) {
     }
   });
 
-  return { results, payouts };
+  return {
+    results,
+    payouts,
+    conditions: parseConditions(pageText),
+  };
 }
