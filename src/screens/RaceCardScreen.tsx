@@ -301,7 +301,7 @@ export function RaceCardScreen({
     const hasLatest = Number.isFinite(latestMs) && latestMs > 0;
     const finalDue = start != null && now >= start + ODDS_FINAL_DELAY_MS;
     if (start != null && start <= now && !finalDue) return;
-    if (finalDue) {
+    if (finalDue && start != null) {
       if (hasLatest && latestMs >= start + ODDS_FINAL_DELAY_MS) return;
     } else if (hasLatest && now - latestMs < 5 * 60 * 1000) {
       return;
