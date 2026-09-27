@@ -12,6 +12,11 @@ type ScreenRoute =
   | { id: number; type: "WEEK" }
   | { id: number; type: "RACE"; raceKey: string };
 
+type PushRoute =
+  | { type: "HOME" }
+  | { type: "WEEK" }
+  | { type: "RACE"; raceKey: string };
+
 export default function App() {
   const nextRouteId = useRef(2);
   const [stack, setStack] = useState<ScreenRoute[]>([{ id: 1, type: "HOME" }]);
@@ -52,7 +57,7 @@ export default function App() {
     return () => subscription.remove();
   }, [goBack]);
 
-  const push = useCallback((route: Omit<ScreenRoute, "id">) => {
+  const push = useCallback((route: PushRoute) => {
     setStack((prev) => {
       const last = prev[prev.length - 1];
       if (route.type === "WEEK" && last.type === "WEEK") return prev;
