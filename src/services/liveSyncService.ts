@@ -66,7 +66,7 @@ async function refreshIncompleteResults(onMutation?:()=>void){
     })
     .sort((a,b)=>(raceStartEpoch(b)??0)-(raceStartEpoch(a)??0));
   let refreshed=0;
-  for(const race of candidates.slice(0,16)){
+  for(const race of candidates){
     const completeness=await getRaceResultCompleteness(race.raceKey);
     if(completeness.resultReady)continue;
     try{
