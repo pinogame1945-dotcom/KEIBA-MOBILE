@@ -282,6 +282,8 @@ export function RaceCardScreen({
 
   useEffect(() => {
     if (!active || !race || race.status === "OFFICIAL" || busy || autoCardRepairRaceKey.current === race.raceKey) return;
+    const start = raceStartEpoch(race);
+    if (start != null && start <= Date.now()) return;
     autoCardRepairRaceKey.current = race.raceKey;
     setBusy("race");
     setError(null);
