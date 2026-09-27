@@ -1,5 +1,5 @@
 import { load } from "cheerio";
-import { absoluteJraUrl } from "./http";
+import { absoluteJraUrl } from "./http.ts";
 
 export type VenueConditionSnapshot = {
   venue: string;
