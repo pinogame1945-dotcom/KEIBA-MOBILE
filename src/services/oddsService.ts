@@ -53,6 +53,20 @@ export async function loadLatestWinOdds(raceKey: string) {
   return getLatestWinOddsByHorse(raceKey);
 }
 
+// Compatibility for the current race screen while it is migrated to per-view reads.
+// Keeps rendering bounded: at most 120 rows per available bet type.
+export async function loadOdds(raceKey: string) {
+  const meta = await loadOddsMeta(raceKey);
+  const groups = await Promise.all(
+    meta.availableTypes.map((type) => loadOddsRows(raceKey, type, null, 120)),
+  );
+  return {
+    rows: groups.flat(),
+    availableTypes: meta.availableTypes,
+    latestObservedAt: meta.latestObservedAt,
+  };
+}
+
 export async function refreshLatestOdds(race: JraRace, entries: JraEntry[]) {
   if (race.status !== "OFFICIAL") throw new Error("正式出馬表取得後にオッズを更新できる");
   const result = await refreshAllRaceOdds(race);
