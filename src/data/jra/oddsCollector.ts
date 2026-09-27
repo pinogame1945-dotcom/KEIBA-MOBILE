@@ -12,19 +12,14 @@ import { isJraFinalOddsHtml } from "./oddsFinalParser";
 
 type OddsAction={path:string;cname:string;label:string;rowText:string};
 type OddsActionResolution={actions:Map<JraOddsBetType,OddsAction>;visitedPages:number};
-const raceRefreshes=new Map<string,Promise<{
+type OddsRefreshResult={
   betTypes:JraOddsBetType[];
   rowCount:number;
   visitedPages:number;
   missingBetTypes:JraOddsBetType[];
-}>>();
-
-const primaryRefreshes=new Map<string,Promise<{
-  betTypes:JraOddsBetType[];
-  rowCount:number;
-  visitedPages:number;
-  missingBetTypes:JraOddsBetType[];
-}>>();
+};
+const raceRefreshes=new Map<string,Promise<OddsRefreshResult>>();
+const primaryRefreshes=new Map<string,Promise<OddsRefreshResult>>();
 
 function oddsSnapshotCheckpoint(race:JraWeekRace,nowMs:number){
   const start=raceStartEpoch(race);
@@ -208,7 +203,7 @@ async function refreshAllRaceOddsImpl(
   race:JraWeekRace,
   initialRaceHtml?:string,
   checkpointOverride?:string|null,
-){
+):Promise<OddsRefreshResult>{
   const required=await requiredBetTypes(race);
   let resolved=await cachedOrDiscoverActions(race,required,initialRaceHtml);
   const first=await collectWithActions(
@@ -240,7 +235,7 @@ export function refreshAllRaceOdds(
   race:JraWeekRace,
   initialRaceHtml?:string,
   checkpointOverride?:string|null,
-){
+):Promise<OddsRefreshResult>{
   const existing=raceRefreshes.get(race.raceKey);
   if(existing){
     if(checkpointOverride==="FINAL"){
@@ -255,7 +250,7 @@ export function refreshAllRaceOdds(
 }
 
 
-async function refreshPrimaryRaceOddsImpl(race:JraWeekRace){
+async function refreshPrimaryRaceOddsImpl(race:JraWeekRace):Promise<OddsRefreshResult>{
   const required:JraOddsBetType[]=["WIN"];
   let resolved=await cachedOrDiscoverActions(race,required);
   const first=await collectWithActions(
@@ -279,7 +274,7 @@ async function refreshPrimaryRaceOddsImpl(race:JraWeekRace){
   };
 }
 
-export function refreshPrimaryRaceOdds(race:JraWeekRace){
+export function refreshPrimaryRaceOdds(race:JraWeekRace):Promise<OddsRefreshResult>{
   const full=raceRefreshes.get(race.raceKey);
   if(full)return full;
   const existing=primaryRefreshes.get(race.raceKey);
