@@ -66,4 +66,21 @@ assert.ok(
   "expired-week archive gaps must receive throttled bounded repair without depending on current-week navigation",
 );
 
+const archiveWeeks = readFileSync(new URL("../src/domain/raceArchiveWeeks.ts", import.meta.url), "utf8");
+const weekScreen = readFileSync(new URL("../src/screens/WeekRacesScreen.tsx", import.meta.url), "utf8");
+const raceScreen = readFileSync(new URL("../src/screens/RaceCardScreen.tsx", import.meta.url), "utf8");
+
+assert.ok(
+  repository.includes("listStoredRaceWeeks") &&
+  repository.includes("groupStoredRaceWeeks") &&
+  repository.includes("listRaceNavigationGroup"),
+  "phase 3 must expose stored race weeks and date-local race navigation groups",
+);
+assert.ok(
+  archiveWeeks.includes("gap>=0&&gap<=3") &&
+  weekScreen.includes("storedWeeks.map") &&
+  raceScreen.includes("listRaceNavigationGroup(nextRace.raceDate)"),
+  "phase 3 archive navigation must preserve multi-day JRA meeting blocks in the existing race UI",
+);
+
 console.log("Result archive contract: PASS");
