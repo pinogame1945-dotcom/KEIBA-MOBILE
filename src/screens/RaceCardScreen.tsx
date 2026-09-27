@@ -320,10 +320,10 @@ export function RaceCardScreen({
     setBusy("result");
     setError(null);
     void refreshOfficialRaceResult(race)
-      .then(load)
+      .then(() => { onMutation?.(); return load(); })
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(null));
-  }, [raceTab, race, results.length, busy, load]);
+  }, [raceTab, race, results.length, busy, load, onMutation]);
 
   const sortedEntries = useMemo(() => [...entries].sort((a,b) => {
     if (sortMode === "POPULARITY") return (a.popularity ?? 999) - (b.popularity ?? 999);
