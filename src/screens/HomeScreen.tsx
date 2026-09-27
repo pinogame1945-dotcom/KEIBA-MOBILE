@@ -170,7 +170,7 @@ export function HomeScreen({ onOpenWeek, onOpenRace, active = true, cacheRevisio
               </View>
               <View style={styles.flex1}>
                 <View style={styles.inline}>
-                  <Text style={styles.noticeRace}>{notice.venue} {notice.raceNo}R</Text>
+                  <Text style={styles.noticeRace}>{notice.raceNo > 0 ? notice.venue + " " + notice.raceNo + "R" : notice.venue + " 全体"}</Text>
                   <Text style={styles.noticeTime}>{notice.observedAt.slice(11,16)}</Text>
                 </View>
                 <Text style={styles.noticeTitle}>{noticeText(notice)}</Text>
