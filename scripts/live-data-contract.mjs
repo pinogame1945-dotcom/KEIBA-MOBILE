@@ -68,6 +68,12 @@ assert.ok(
   "payout repair must not consume result-collection slots",
 );
 assert.ok(
+  sync.includes("completeness.conditionsComplete") &&
+  sync.includes('"condition_repair_attempt:"') &&
+  sync.includes("repairedConditions>=2"),
+  "stored results with missing weather/track conditions must receive throttled background repair",
+);
+assert.ok(
   storage.includes("withLiveDbWrite") &&
   storage.includes("withLiveDbTransaction") &&
   repository.includes("withLiveDbTransaction") &&
@@ -78,7 +84,7 @@ assert.ok(
 );
 assert.ok(
   !sync.includes("candidates.slice(0,16)") &&
-  sync.includes("if(refreshed>=4)break"),
+  sync.includes("if(refreshed>=4)continue"),
   "result repair must scan all overdue races while limiting actual successful repairs",
 );
 assert.ok(
