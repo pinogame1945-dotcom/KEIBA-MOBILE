@@ -37,13 +37,6 @@ function localTimeLabel(iso: string | null) {
   return String(date.getHours()).padStart(2,"0") + ":" + String(date.getMinutes()).padStart(2,"0");
 }
 
-function localClock(iso: string | null) {
-  if (!iso) return null;
-  const date = new Date(iso);
-  if (!Number.isFinite(date.getTime())) return null;
-  return String(date.getHours()).padStart(2, "0") + ":" + String(date.getMinutes()).padStart(2, "0");
-}
-
 export function WeekRacesScreen({
   onOpenRace,
   onBack,
@@ -148,33 +141,76 @@ export function WeekRacesScreen({
     })
     .sort((a,b) => (raceStartEpoch(a) ?? Infinity) - (raceStartEpoch(b) ?? Infinity))[0]?.raceKey ?? null;
 
-  const venueStatusRace = [...visible].reverse().find((race) => race.weather || race.trackCondition) ?? visible[0];
   const snapshotUsable = Boolean(
-    venueSnapshot && (venueSnapshot.weather || venueSnapshot.turfCondition || venueSnapshot.dirtCondition),
+    venueSnapshot &&
+    selectedDate &&
+    venueSnapshot.sourceObservedDate === selectedDate &&
+    (venueSnapshot.weather || venueSnapshot.turfCondition || venueSnapshot.dirtCondition),
   );
-  const venueStatusText = snapshotUsable && venueSnapshot
-    ? [
-        venueSnapshot.weather ? "天候 " + venueSnapshot.weather : null,
-        venueSnapshot.turfCondition ? "芝 " + venueSnapshot.turfCondition : null,
-        venueSnapshot.dirtCondition ? "ダ " + venueSnapshot.dirtCondition : null,
-      ].filter(Boolean).join(" / ")
-    : venueStatusRace && (venueStatusRace.weather || venueStatusRace.trackCondition)
-      ? [venueStatusRace.weather, venueStatusRace.trackCondition].filter(Boolean).join(" / ")
-      : venueSnapshot
-        ? "馬場情報 再取得待ち"
-        : "馬場情報 未取得";
-  const venueUpdatedAt = snapshotUsable ? venueSnapshot?.fetchedAt ?? null : null;
+  const currentSnapshot = snapshotUsable ? venueSnapshot : null;
+  const latestWeatherRace = [...visible].reverse().find((item) => item.weather);
+  const latestTurfRace = [...visible].reverse().find(
+    (item) => item.surface === "TURF" && item.trackCondition,
+  );
+  const latestDirtRace = [...visible].reverse().find(
+    (item) => item.surface === "DIRT" && item.trackCondition,
+  );
+  const resultWeather = latestWeatherRace?.weather ?? null;
+  const resultTurf = latestTurfRace?.trackCondition ?? null;
+  const resultDirt = latestDirtRace?.trackCondition ?? null;
+  const venueWeather = resultWeather ?? currentSnapshot?.weather ?? null;
+  const venueTurf = resultTurf ?? currentSnapshot?.turfCondition ?? null;
+  const venueDirt = resultDirt ?? currentSnapshot?.dirtCondition ?? null;
+  const venueStatusText = [
+    venueWeather ? "天候 " + venueWeather : null,
+    venueTurf ? "芝 " + venueTurf : null,
+    venueDirt ? "ダ " + venueDirt : null,
+  ].filter(Boolean).join(" / ") || (venueSnapshot ? "馬場情報 更新待ち" : "馬場情報 未取得");
+  const usesResultCondition = Boolean(resultWeather || resultTurf || resultDirt);
+  const usesSnapshotCondition = Boolean(
+    currentSnapshot && (
+      (!resultWeather && currentSnapshot.weather) ||
+      (!resultTurf && currentSnapshot.turfCondition) ||
+      (!resultDirt && currentSnapshot.dirtCondition)
+    ),
+  );
+  const venueSourceText = usesResultCondition && usesSnapshotCondition
+    ? "結果情報＋JRA馬場"
+    : usesResultCondition
+      ? "結果情報から取得"
+      : usesSnapshotCondition
+        ? currentSnapshot?.sourceObservedLabel
+          ? "JRA " + currentSnapshot.sourceObservedLabel
+          : "JRA馬場情報"
+        : venueSnapshot
+          ? "JRA馬場情報 更新待ち"
+          : "馬場取得時刻なし";
 
   const conditionForRace = (race: JraRace) => {
-    if (race.weather || race.trackCondition) return [race.weather, race.trackCondition].filter(Boolean);
-    if (!snapshotUsable || !venueSnapshot) return [];
-    const track = race.discipline === "OBSTACLE" || race.surface === "MIXED"
-      ? [venueSnapshot.turfCondition && "芝" + venueSnapshot.turfCondition,
-          venueSnapshot.dirtCondition && "ダ" + venueSnapshot.dirtCondition].filter(Boolean).join(" / ")
-      : race.surface === "DIRT"
-        ? venueSnapshot.dirtCondition
-        : venueSnapshot.turfCondition;
-    return [venueSnapshot.weather, track].filter(Boolean);
+    const weather = race.weather ?? currentSnapshot?.weather ?? null;
+    if (race.discipline === "OBSTACLE" || race.surface === "MIXED") {
+      const turf = currentSnapshot?.turfCondition ?? null;
+      const dirt = currentSnapshot?.dirtCondition ?? null;
+      const genericTrack = !turf && !dirt ? race.trackCondition : null;
+      return [
+        weather ? "天候 " + weather : null,
+        turf ? "芝 " + turf : null,
+        dirt ? "ダ " + dirt : null,
+        genericTrack ? "馬場 " + genericTrack : null,
+      ].filter((value): value is string => Boolean(value));
+    }
+    if (race.surface === "DIRT") {
+      const dirt = race.trackCondition ?? currentSnapshot?.dirtCondition ?? null;
+      return [
+        weather ? "天候 " + weather : null,
+        dirt ? "ダ " + dirt : null,
+      ].filter((value): value is string => Boolean(value));
+    }
+    const turf = race.trackCondition ?? currentSnapshot?.turfCondition ?? null;
+    return [
+      weather ? "天候 " + weather : null,
+      turf ? "芝 " + turf : null,
+    ].filter((value): value is string => Boolean(value));
   };
 
   return (
@@ -230,7 +266,7 @@ export function WeekRacesScreen({
           </View>
         )}
 
-        {selectedVenue && venueStatusRace ? (
+        {selectedVenue && visible.length ? (
           <View style={styles.venueStatus}>
             <View>
               <Text style={styles.venueStatusTitle}>{selectedVenue}</Text>
@@ -238,13 +274,7 @@ export function WeekRacesScreen({
                 {venueStatusText}
               </Text>
             </View>
-            <Text style={styles.updated}>
-              {localClock(venueUpdatedAt)
-                ? "馬場取得 " + localClock(venueUpdatedAt)
-                : venueStatusRace.weather || venueStatusRace.trackCondition
-                  ? "結果情報から取得"
-                  : "馬場取得時刻なし"}
-            </Text>
+            <Text style={styles.updated}>{venueSourceText}</Text>
           </View>
         ) : null}
 
@@ -259,6 +289,7 @@ export function WeekRacesScreen({
           const state = raceStateLabel(race, resultKeys.has(race.raceKey), now);
           const isNext = race.raceKey === nextRaceKey;
           const isPast = (raceStartEpoch(race) ?? Infinity) <= now;
+          const isFinal = state === "結果確定";
           const isDisrupted = race.scheduleStatus === "RESCHEDULED" ||
             race.raceStatus === "CANCELLED" || race.raceStatus === "ABANDONED";
           return (
@@ -267,7 +298,7 @@ export function WeekRacesScreen({
               style={[
                 styles.raceCard,
                 isNext && styles.raceCardNext,
-                isPast && !isNext && !isDisrupted && styles.raceCardPast,
+                isPast && !isNext && !isDisrupted && !isFinal && styles.raceCardPast,
                 isDisrupted && styles.raceCardDisrupted,
               ]}
               onPress={() => onOpenRace(race.raceKey)}
@@ -276,7 +307,7 @@ export function WeekRacesScreen({
                 <Text style={styles.raceNo}>{race.raceNo}R</Text>
                 <Text style={styles.start}>{race.startTime ?? "--:--"}</Text>
                 {isNext ? <Text style={styles.nextBadge}>NEXT</Text> : null}
-                {!isNext && state === "結果確定" ? <Text style={styles.resultBadge}>結果</Text> : null}
+                {!isNext && isFinal ? <Text style={styles.resultBadge}>結果確定</Text> : null}
               </View>
               <View style={styles.raceMain}>
                 <Text style={styles.raceName}>{race.raceName ?? "レース名取得待ち"}</Text>
@@ -284,7 +315,7 @@ export function WeekRacesScreen({
                   {[race.raceClass, raceCourseLabel(race)].filter(Boolean).join("　") || "詳細取得待ち"}
                 </Text>
                 <Text style={styles.raceCondition}>
-                  {[...conditionForRace(race), state].filter(Boolean).join(" / ")}
+                  {[...conditionForRace(race), isFinal ? null : state].filter(Boolean).join(" / ")}
                 </Text>
               </View>
               <Text style={styles.chevron}>›</Text>
@@ -334,7 +365,10 @@ const styles = StyleSheet.create({
   raceNo: { fontSize: 20, fontWeight: "900", color: "#111827" },
   start: { marginTop: 3, color: "#6b7280", fontSize: 12, fontWeight: "700" },
   nextBadge: { marginTop: 5, backgroundColor: "#111827", color: "#fff", borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2, fontSize: 8, fontWeight: "900" },
-  resultBadge: { marginTop: 5, color: "#111827", fontSize: 9, fontWeight: "900" },
+  resultBadge: {
+    marginTop: 5, backgroundColor: "#111827", color: "#fff", borderRadius: 999,
+    paddingHorizontal: 8, paddingVertical: 3, fontSize: 8, fontWeight: "900",
+  },
   raceMain: { flex: 1 },
   raceName: { color: "#111827", fontSize: 16, fontWeight: "900" },
   raceMeta: { marginTop: 5, color: "#4b5563", fontSize: 11, fontWeight: "800" },
