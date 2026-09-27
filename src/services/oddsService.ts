@@ -1,7 +1,9 @@
 import type { JraEntry, JraRace, OddsBetType } from "../domain/live";
 import { refreshAllRaceOdds } from "../data/jra/oddsCollector";
 import { bracketQuinellaOffered } from "../data/jra/oddsAvailability";
-import { getLatestOddsRows, getOddsAvailability } from "../repositories/liveRepository";
+import {
+  getLatestOddsRows,getLatestWinOddsByHorse,getOddsAvailability,getOddsRowsForSelection,
+} from "../repositories/liveRepository";
 
 const LABEL: Record<OddsBetType, string> = {
   WIN: "単勝",
@@ -24,24 +26,36 @@ export function requiredOddsTypes(entries: JraEntry[]): OddsBetType[] {
   return types;
 }
 
-export async function loadOdds(raceKey: string) {
-  const rows = await getLatestOddsRows(raceKey);
+export async function loadOddsMeta(raceKey: string) {
   const availability = await getOddsAvailability(raceKey);
   const latestObservedAt = availability
     .map((row) => Date.parse(row.observedAt))
     .filter(Number.isFinite)
     .sort((a,b) => b-a)[0];
   return {
-    rows,
     availableTypes: availability.map((row) => row.betType),
     latestObservedAt: Number.isFinite(latestObservedAt) ? new Date(latestObservedAt).toISOString() : null,
   };
 }
 
+export async function loadOddsRows(
+  raceKey: string,
+  betType: OddsBetType,
+  selection?: number | null,
+) {
+  return selection == null
+    ? getLatestOddsRows(raceKey, betType, 1000)
+    : getOddsRowsForSelection(raceKey, betType, selection, 1000);
+}
+
+export async function loadLatestWinOdds(raceKey: string) {
+  return getLatestWinOddsByHorse(raceKey);
+}
+
 export async function refreshLatestOdds(race: JraRace, entries: JraEntry[]) {
   if (race.status !== "OFFICIAL") throw new Error("正式出馬表取得後にオッズを更新できる");
   const result = await refreshAllRaceOdds(race);
-  const latest = await loadOdds(race.raceKey);
+  const latest = await loadOddsMeta(race.raceKey);
   const required = requiredOddsTypes(entries);
   const missing = required.filter((type) => !latest.availableTypes.includes(type));
   return { ...result, ...latest, missing };
