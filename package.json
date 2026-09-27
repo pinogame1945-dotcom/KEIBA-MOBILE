@@ -7,7 +7,10 @@
     "start": "expo start",
     "android": "expo run:android",
     "typecheck": "tsc --noEmit",
-    "android:smoke": "expo export --platform android --output-dir dist-android-smoke --clear"
+    "foundation:contract": "node scripts/foundation-contract.mjs",
+    "expo:config:smoke": "expo config --type public --json > /dev/null",
+    "android:smoke": "expo export --platform android --output-dir dist-android-smoke --clear",
+    "android:prebuild:smoke": "expo prebuild --platform android --no-install --clean"
   },
   "dependencies": {
     "cheerio": "1.0.0-rc.12",
