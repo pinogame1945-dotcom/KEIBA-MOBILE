@@ -113,3 +113,26 @@ export type ScheduleMeeting = {
   meetingDay: number;
   races: ScheduleRace[];
 };
+
+
+export type JraRaceResult = {
+  raceKey: string;
+  finishPosition: number | null;
+  finishRaw: string;
+  horseNo: number | null;
+  horseName: string;
+  finishTime: string | null;
+  margin: string | null;
+  last3f: number | null;
+  average1f: number | null;
+  popularity: number | null;
+  resultStatus: "FINISHED" | "SCRATCHED" | "EXCLUDED" | "DISQUALIFIED" | "DNF" | "UNKNOWN";
+};
+
+export type JraPayout = {
+  raceKey: string;
+  betType: OddsBetType;
+  selection: string;
+  payoutYen: number | null;
+  popularity: number | null;
+};

@@ -23,6 +23,13 @@ function cleanJockeyName(value: string | null | undefined) {
   const normalized = clean(value).replace(/^(?:騎手[：:\s]*)/, "").replace(/^[☆★△▲▽▼◇◆]+/, "").trim();
   return normalized || null;
 }
+function cleanHorseName(value: string | null | undefined) {
+  return clean(value)
+    .replace(/(?:除外|取消)$/,"")
+    .replace(/\d+(?:\.\d+)?\s*\(\d+番人気\).*$/,"")
+    .replace(/\d{3}\s*kg\s*\([+-]?\d+\).*$/,"")
+    .trim();
+}
 function pushJraUrl(out: Set<string>, href: string, baseUrl: string) {
   const url = absoluteJraUrl(href, baseUrl);
   if (!url || !url.includes("/JRADB/accessD.html")) return;
@@ -113,9 +120,9 @@ export function parseRaceCard(html: string, sourceUrl: string): JraRaceCard {
     const horseCell = horseIdx >= 0 ? cells.eq(horseIdx) : cells.eq(Math.min(2, cells.length - 1));
     const sexCell = sexIdx >= 0 ? cells.eq(sexIdx) : cells.eq(Math.min(3, cells.length - 1));
     const horseCellText = clean(horseCell.text());
-    const horseLink = horseCell.find("a[href*='/horse/']").first();
-    let horseName = clean(horseLink.text()) || clean(horseCellText.split(" ")[0]);
-    horseName = clean(horseName.replace(/(?:除外|取消)$/, ""));
+    const horseLink = horseCell.find("a").filter((_, a) => clean($(a).text()).length > 0).first();
+    let horseName = cleanHorseName(horseLink.text());
+    if (!horseName) horseName = cleanHorseName(horseCellText);
     if (!horseName || /^(?:馬名|父|母)$/.test(horseName)) return;
 
     const gateCell = gateIdx >= 0 ? cells.eq(gateIdx) : null;

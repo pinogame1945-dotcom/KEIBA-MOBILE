@@ -66,6 +66,20 @@ CREATE TABLE IF NOT EXISTS notices (
 );
 CREATE INDEX IF NOT EXISTS idx_notices_date ON notices(race_date, observed_at DESC);
 
+CREATE TABLE IF NOT EXISTS race_fetch_queue (
+  url TEXT PRIMARY KEY,
+  target_fingerprint TEXT NOT NULL,
+  status TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  race_date TEXT,
+  venue TEXT,
+  race_no INTEGER,
+  last_error TEXT,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_race_fetch_queue_target_status
+  ON race_fetch_queue(target_fingerprint,status,race_date,venue,race_no);
+
 CREATE TABLE IF NOT EXISTS odds_current (
   race_key TEXT NOT NULL,
   bet_type TEXT NOT NULL,
@@ -105,6 +119,33 @@ CREATE TABLE IF NOT EXISTS odds_actions (
   PRIMARY KEY (race_key, bet_type)
 );
 
+CREATE TABLE IF NOT EXISTS race_results (
+  race_key TEXT NOT NULL,
+  finish_position INTEGER,
+  finish_raw TEXT NOT NULL,
+  horse_no INTEGER,
+  horse_name TEXT NOT NULL,
+  finish_time TEXT,
+  margin TEXT,
+  last_3f REAL,
+  average_1f REAL,
+  popularity INTEGER,
+  result_status TEXT NOT NULL,
+  observed_at TEXT NOT NULL,
+  PRIMARY KEY (race_key, horse_name)
+);
+CREATE INDEX IF NOT EXISTS idx_race_results_race_finish ON race_results(race_key, finish_position);
+
+CREATE TABLE IF NOT EXISTS payouts (
+  race_key TEXT NOT NULL,
+  bet_type TEXT NOT NULL,
+  selection TEXT NOT NULL,
+  payout_yen INTEGER,
+  popularity INTEGER,
+  observed_at TEXT NOT NULL,
+  PRIMARY KEY (race_key, bet_type, selection)
+);
+
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -115,6 +156,10 @@ export async function getLiveDb() {
   if (!dbPromise) {
     dbPromise = openDatabaseAsync("keiba-mobile-live.db").then(async (db) => {
       await db.execAsync(SCHEMA);
+      const resultColumns = await db.getAllAsync<{ name: string }>("PRAGMA table_info(race_results)");
+      if (!resultColumns.some((column) => column.name === "average_1f")) {
+        await db.execAsync("ALTER TABLE race_results ADD COLUMN average_1f REAL");
+      }
       return db;
     });
   }

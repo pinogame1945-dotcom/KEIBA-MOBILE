@@ -135,8 +135,10 @@ export function parseJraRaceHeader(html: string, sourceUrl: string): JraRace {
     : courseText.includes("芝") ? "TURF" as const
     : courseText.includes("ダート") ? "DIRT" as const : null;
   const direction = courseText.includes("左") ? "LEFT" as const : courseText.includes("右") ? "RIGHT" as const : null;
-  const weather = bodyPageText.match(/天候[：:]?\s*(晴|曇|雨|小雨|雪|小雪)/)?.[1] ?? null;
-  const trackCondition = bodyPageText.match(/(?:芝|ダート)(?:の状態)?[：:]?\s*(良|稍重|重|不良)/)?.[1] ?? null;
+  // 出馬表本文には各馬の過去走馬場が含まれるため、ここでは現況を推測しない。
+  // 開催日の天候・馬場は専用のJRA馬場情報から取得する。
+  const weather = null;
+  const trackCondition = null;
 
   return {
     raceKey: "JRA:" + raceDate + ":" + venue + ":" + raceNo,

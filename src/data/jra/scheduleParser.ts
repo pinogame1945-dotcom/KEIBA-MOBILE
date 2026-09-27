@@ -37,6 +37,15 @@ function parseDistance(text: string) {
   return Number.isFinite(value) ? value : null;
 }
 
+function normalizeRaceName(description: string) {
+  const distance = description.match(/[\d,]{3,5}\s*（(?:芝|ダ(?:ート)?)[^）]*）/);
+  if (!distance) return clean(description) || null;
+  const before = clean(description.slice(0, distance.index));
+  const after = clean(description.slice((distance.index ?? 0) + distance[0].length));
+  const qualifier = after.match(/（[^）]+）/)?.[0] ?? "";
+  return clean([before, qualifier].filter(Boolean).join(" ")) || null;
+}
+
 export function calendarDayUrl(iso: string) {
   const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!m) throw new Error("開催日の日付形式が不正");
@@ -74,7 +83,7 @@ export function parseCalendarDay(html: string, sourceUrl: string): ScheduleMeeti
       const description = clean(match[2]).replace(/^\|\s*/, "").replace(/\s*\|$/, "");
       races.push({
         raceDate, venue, raceNo,
-        raceName: description || null,
+        raceName: normalizeRaceName(description),
         startTime: String(Number(match[3])).padStart(2, "0") + ":" + match[4],
         discipline: description.includes("障害") ? "OBSTACLE" : "FLAT",
         surface: parseSurface(description),
