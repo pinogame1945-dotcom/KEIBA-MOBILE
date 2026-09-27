@@ -299,7 +299,7 @@ export async function saveOddsSnapshotRows(
   });
 }
 
-export async function getLatestOddsRows(raceKey: string, betType?: OddsBetType, limit = 10000) {
+export async function getLatestOddsRows(raceKey: string, betType?: OddsBetType, limit = 1000) {
   const db = await getLiveDb();
   const where = betType ? "WHERE race_key=? AND bet_type=?" : "WHERE race_key=?";
   const args: Array<string | number> = betType ? [raceKey, betType, limit] : [raceKey, limit];
@@ -307,8 +307,39 @@ export async function getLatestOddsRows(raceKey: string, betType?: OddsBetType, 
     `SELECT race_key AS raceKey,bet_type AS betType,selection_1 AS selection1,
       NULLIF(selection_2,-1) AS selection2,NULLIF(selection_3,-1) AS selection3,
       odds,odds_min AS oddsMin,odds_max AS oddsMax,observed_at AS observedAt,source_url AS sourceUrl
-      FROM odds_current ${where} ORDER BY bet_type,selection_1,selection_2,selection_3 LIMIT ?`,
+      FROM odds_current ${where} ORDER BY selection_1,selection_2,selection_3 LIMIT ?`,
     ...args,
+  );
+}
+
+export async function getOddsRowsForSelection(
+  raceKey: string,
+  betType: OddsBetType,
+  selection: number,
+  limit = 1000,
+) {
+  const db = await getLiveDb();
+  return db.getAllAsync<OddsRow>(
+    `SELECT race_key AS raceKey,bet_type AS betType,selection_1 AS selection1,
+      NULLIF(selection_2,-1) AS selection2,NULLIF(selection_3,-1) AS selection3,
+      odds,odds_min AS oddsMin,odds_max AS oddsMax,observed_at AS observedAt,source_url AS sourceUrl
+      FROM odds_current
+      WHERE race_key=? AND bet_type=?
+        AND (selection_1=? OR selection_2=? OR selection_3=?)
+      ORDER BY COALESCE(odds,odds_min,999999999),selection_1,selection_2,selection_3
+      LIMIT ?`,
+    raceKey,betType,selection,selection,selection,limit,
+  );
+}
+
+export async function getLatestWinOddsByHorse(raceKey: string) {
+  const db = await getLiveDb();
+  return db.getAllAsync<{ horseNo: number; odds: number | null }>(
+    `SELECT selection_1 AS horseNo,odds
+     FROM odds_current
+     WHERE race_key=? AND bet_type='WIN' AND selection_1 IS NOT NULL
+     ORDER BY selection_1`,
+    raceKey,
   );
 }
 
