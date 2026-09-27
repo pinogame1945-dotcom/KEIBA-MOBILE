@@ -60,7 +60,8 @@ export async function prepareRaceFetchRun(targetFingerprint: string) {
   if (resume) {
     await db.withTransactionAsync(async () => {
       await db.runAsync(
-        "UPDATE race_fetch_queue SET status='PENDING',attempts=0,last_error=NULL,updated_at=CURRENT_TIMESTAMP",
+        "UPDATE race_fetch_queue SET status='PENDING',attempts=0,last_error=NULL,updated_at=CURRENT_TIMESTAMP " +
+        "WHERE status IN ('FETCHING','RETRY','FAILED')",
       );
       await db.runAsync(
         "INSERT INTO meta(key,value) VALUES('race_fetch_state','RUNNING') " +
