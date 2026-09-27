@@ -59,7 +59,7 @@ async function refreshIncompleteResults(onMutation?:()=>void){
   const races=await listRacingWeekRaces();
   const now=Date.now();
   const candidates=races
-    .filter(race=>race.canonicalRaceId)
+    .filter(race=>race.canonicalRaceId||race.sourceUrl.includes("/JRADB/accessD.html"))
     .filter(race=>race.scheduleStatus==="ACTIVE"&&race.raceStatus!=="CANCELLED"&&race.raceStatus!=="ABANDONED")
     .filter(race=>{
       const start=raceStartEpoch(race);
@@ -100,7 +100,7 @@ async function refreshIncompletePayouts(){
   const races=await listRacingWeekRaces();
   const now=Date.now();
   const candidates=races
-    .filter(race=>race.canonicalRaceId)
+    .filter(race=>race.canonicalRaceId||race.sourceUrl.includes("/JRADB/accessD.html"))
     .filter(race=>race.scheduleStatus==="ACTIVE"&&race.raceStatus!=="CANCELLED"&&race.raceStatus!=="ABANDONED")
     .filter(race=>{
       const start=raceStartEpoch(race);
