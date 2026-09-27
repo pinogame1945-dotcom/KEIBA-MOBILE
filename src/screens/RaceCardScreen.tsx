@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View,
+  ActivityIndicator, BackHandler, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import type {
@@ -172,6 +172,10 @@ export function RaceCardScreen({
   const autoOddsStarted = useRef(false);
   const autoResultRaceKey = useRef<string | null>(null);
   const autoCardRepairRaceKey = useRef<string | null>(null);
+  const scrollRef = useRef<ScrollView | null>(null);
+  const cardScrollYRef = useRef(0);
+  const horseOddsReturnRef = useRef<{ scrollY: number; horseNo: number | null } | null>(null);
+  const pendingCardRestoreYRef = useRef<number | null>(null);
 
   const load = useCallback(async () => {
     const nextRace = await getRace(raceKey);
@@ -214,6 +218,9 @@ export function RaceCardScreen({
     autoOddsStarted.current = false;
     autoResultRaceKey.current = null;
     autoCardRepairRaceKey.current = null;
+    cardScrollYRef.current = 0;
+    horseOddsReturnRef.current = null;
+    pendingCardRestoreYRef.current = null;
     setDetailHorseNo(null);
     setRaceTab("CARD");
     setOddsView("NORMAL");
@@ -351,8 +358,44 @@ export function RaceCardScreen({
     finally { setBusy(null); }
   };
 
+  const returnFromHorseOdds = useCallback(() => {
+    const context = horseOddsReturnRef.current;
+    if (!context) return false;
+    horseOddsReturnRef.current = null;
+    pendingCardRestoreYRef.current = context.scrollY;
+    setRaceTab("CARD");
+    setError(null);
+    setDetailHorseNo(null);
+    return true;
+  }, []);
+
+  const handleBack = useCallback(() => {
+    if (returnFromHorseOdds()) return;
+    (onBack ?? onOpenWeek)();
+  }, [onBack, onOpenWeek, returnFromHorseOdds]);
+
+  useEffect(() => {
+    if (!active || !horseOddsReturnRef.current) return;
+    const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (!returnFromHorseOdds()) return false;
+      return true;
+    });
+    return () => subscription.remove();
+  }, [active, raceTab, returnFromHorseOdds]);
+
+  useEffect(() => {
+    if (!active || raceTab !== "CARD") return;
+    const y = pendingCardRestoreYRef.current;
+    if (y == null) return;
+    pendingCardRestoreYRef.current = null;
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({ y, animated: false });
+    });
+  }, [active, raceTab]);
+
   const openHorseOdds = (horse: JraEntry) => {
     if (horse.horseNo == null) return;
+    horseOddsReturnRef.current = { scrollY: cardScrollYRef.current, horseNo: horse.horseNo };
     setSelectedHorseNo(horse.horseNo);
     setOddsView("HORSE");
     const firstCombo = HORSE_RANK_TYPES.find((type) => availableTypes.includes(type)) ?? "QUINELLA";
@@ -370,9 +413,16 @@ export function RaceCardScreen({
 
   return (
     <SafeAreaView edges={["top"]} style={styles.safeArea}>
-      <ScrollView contentContainerStyle={styles.container}>
+      <ScrollView
+        ref={scrollRef}
+        contentContainerStyle={styles.container}
+        scrollEventThrottle={16}
+        onScroll={(event) => {
+          if (raceTab === "CARD") cardScrollYRef.current = event.nativeEvent.contentOffset.y;
+        }}
+      >
         <View style={styles.topBar}>
-          <TouchableOpacity style={styles.topSide} onPress={onBack ?? onOpenWeek}><Text style={styles.backArrow}>←</Text></TouchableOpacity>
+          <TouchableOpacity style={styles.topSide} onPress={handleBack}><Text style={styles.backArrow}>←</Text></TouchableOpacity>
           <Text style={styles.topTitle}>{race.venue} {race.raceNo}R</Text>
           <View style={[styles.topSide, styles.topRight]}><Text style={styles.liveText}>● LIVE</Text></View>
         </View>
@@ -419,7 +469,14 @@ export function RaceCardScreen({
             <TouchableOpacity
               key={tab}
               style={[styles.raceTab, raceTab === tab && styles.raceTabActive]}
-              onPress={() => { setRaceTab(tab); setError(null); }}
+              onPress={() => {
+                if (tab === "CARD" && horseOddsReturnRef.current) {
+                  returnFromHorseOdds();
+                  return;
+                }
+                setRaceTab(tab);
+                setError(null);
+              }}
             >
               <Text style={[styles.raceTabText, raceTab === tab && styles.raceTabTextActive]}>{label}</Text>
             </TouchableOpacity>
@@ -689,7 +746,7 @@ export function RaceCardScreen({
           ) : (
             <View style={styles.resultEmpty}>
               {busy === "result" ? <ActivityIndicator /> : null}
-              <Text style={styles.resultEmptyTitle}>{isFuture ? "結果はレース終了後に表示" : "JRA公式結果を確認中"}</Text>
+              <Text style={styles.resultEmptyTitle}>{isFuture ? "結果はレース終了後に表示" : "確定結果を確認中"}</Text>
               <Text style={styles.resultEmptySub}>
                 {isFuture
                   ? race.discipline === "OBSTACLE"

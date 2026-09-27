@@ -25,6 +25,8 @@ jobs:
         run: npm run foundation:contract
       - name: LIVE data contract
         run: npm run live-data:contract
+      - name: LIVE UI contract
+        run: npm run live-ui:contract
       - name: Typecheck
         run: npm run typecheck
       - name: Expo config smoke

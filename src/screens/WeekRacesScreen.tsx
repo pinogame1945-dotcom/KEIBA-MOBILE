@@ -5,7 +5,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { JraRace } from "../domain/live";
 import { raceStartEpoch } from "../data/jra/oddsAvailability";
-import { raceCourseLabel, raceStateLabel, surfaceLabel } from "../ui/raceLabels";
+import { raceCourseLabel, raceStateLabel } from "../ui/raceLabels";
 import {
   listRaceKeysWithResults, listRacingWeekRaces, localTodayIso, racingWeekCandidateDates,
 } from "../repositories/liveRepository";
@@ -171,7 +171,7 @@ export function WeekRacesScreen({
             <View>
               <Text style={styles.venueStatusTitle}>{selectedVenue}</Text>
               <Text style={styles.venueStatusMeta}>
-                {[venueStatusRace.weather, surfaceLabel(venueStatusRace.surface), venueStatusRace.trackCondition].filter(Boolean).join(" / ") || "状態取得待ち"}
+                {[venueStatusRace.weather, venueStatusRace.trackCondition].filter(Boolean).join(" / ") || "状態取得待ち"}
               </Text>
             </View>
             <Text style={styles.updated}>最終更新 {venueStatusRace.fetchedAt.slice(11,16)}</Text>
