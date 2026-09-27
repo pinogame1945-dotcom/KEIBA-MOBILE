@@ -892,10 +892,11 @@ export async function listIncompleteArchiveRaces(limit=48){
   return db.getAllAsync<JraRace>(
     `SELECT ${raceSelect()}
      FROM races
-     LEFT JOIN race_archive_state a ON a.race_key=races.race_key
      WHERE races.schedule_status='ACTIVE'
        AND races.race_status NOT IN ('CANCELLED','ABANDONED')
-       AND COALESCE(a.archive_state,'LIVE')<>'READY'
+       AND COALESCE((
+         SELECT a.archive_state FROM race_archive_state a WHERE a.race_key=races.race_key
+       ),'LIVE')<>'READY'
      ORDER BY races.race_date DESC,races.venue,races.race_no DESC
      LIMIT ?`,
     safeLimit,
