@@ -2,6 +2,8 @@ import { openDatabaseAsync, type SQLiteDatabase } from "expo-sqlite";
 
 let dbPromise: Promise<SQLiteDatabase> | null = null;
 
+const LIVE_SCHEMA_VERSION = 2;
+
 const SCHEMA = `
 PRAGMA foreign_keys = ON;
 
@@ -185,6 +187,124 @@ async function addColumnIfMissing(
   if (!columns.some((item) => item.name === column)) await db.execAsync(sql);
 }
 
+async function applyLiveMigrations(db: SQLiteDatabase) {
+  await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
+      applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  const versionRow = await db.getFirstAsync<{ user_version: number }>("PRAGMA user_version");
+  const current = Number(versionRow?.user_version ?? 0);
+
+  if (current < 1) {
+    await db.runAsync(
+      "INSERT OR IGNORE INTO schema_migrations(version,name) VALUES(1,'live-baseline-before-result-archive')",
+    );
+  }
+
+  if (current < 2) {
+    await db.execAsync(`
+      CREATE TABLE IF NOT EXISTS race_archive_state (
+        race_key TEXT PRIMARY KEY,
+        canonical_race_id TEXT,
+        result_ready INTEGER NOT NULL DEFAULT 0,
+        payout_ready INTEGER NOT NULL DEFAULT 0,
+        final_odds_ready INTEGER NOT NULL DEFAULT 0,
+        conditions_ready INTEGER NOT NULL DEFAULT 0,
+        archive_state TEXT NOT NULL DEFAULT 'LIVE',
+        archived_at TEXT,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (race_key) REFERENCES races(race_key) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_race_archive_state_status
+        ON race_archive_state(archive_state,updated_at,race_key);
+
+      CREATE TABLE IF NOT EXISTS result_provenance (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        race_key TEXT NOT NULL,
+        source TEXT NOT NULL,
+        source_url TEXT,
+        parser_version INTEGER NOT NULL,
+        result_fingerprint TEXT NOT NULL,
+        fetched_at TEXT NOT NULL,
+        result_count INTEGER NOT NULL,
+        payout_count INTEGER NOT NULL,
+        conditions_complete INTEGER NOT NULL DEFAULT 0,
+        UNIQUE(race_key,source,result_fingerprint),
+        FOREIGN KEY (race_key) REFERENCES races(race_key) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_result_provenance_race
+        ON result_provenance(race_key,fetched_at DESC,id DESC);
+    `);
+
+    await db.runAsync(
+      `INSERT OR IGNORE INTO race_archive_state(
+         race_key,canonical_race_id,result_ready,payout_ready,final_odds_ready,
+         conditions_ready,archive_state,archived_at,updated_at
+       )
+       SELECT race_key,canonical_race_id,0,0,0,0,'LIVE',NULL,CURRENT_TIMESTAMP
+       FROM races`,
+    );
+
+    await db.runAsync(
+      `UPDATE race_archive_state
+       SET canonical_race_id=(SELECT r.canonical_race_id FROM races r WHERE r.race_key=race_archive_state.race_key),
+           result_ready=CASE WHEN EXISTS(
+             SELECT 1 FROM race_results rr WHERE rr.race_key=race_archive_state.race_key
+           ) THEN 1 ELSE 0 END,
+           payout_ready=CASE WHEN EXISTS(
+             SELECT 1 FROM payouts p WHERE p.race_key=race_archive_state.race_key
+           ) THEN 1 ELSE 0 END,
+           final_odds_ready=CASE WHEN EXISTS(
+             SELECT 1 FROM meta m WHERE m.key='odds_final_confirmed:'||race_archive_state.race_key
+           ) THEN 1 ELSE 0 END,
+           conditions_ready=CASE WHEN EXISTS(
+             SELECT 1 FROM races r
+             WHERE r.race_key=race_archive_state.race_key
+               AND r.weather IS NOT NULL AND r.track_condition IS NOT NULL
+           ) THEN 1 ELSE 0 END,
+           archive_state=CASE
+             WHEN EXISTS(SELECT 1 FROM race_results rr WHERE rr.race_key=race_archive_state.race_key)
+              AND EXISTS(SELECT 1 FROM payouts p WHERE p.race_key=race_archive_state.race_key)
+              AND EXISTS(SELECT 1 FROM meta m WHERE m.key='odds_final_confirmed:'||race_archive_state.race_key)
+              AND EXISTS(
+                SELECT 1 FROM races r
+                WHERE r.race_key=race_archive_state.race_key
+                  AND r.weather IS NOT NULL AND r.track_condition IS NOT NULL
+              ) THEN 'READY'
+             WHEN EXISTS(
+               SELECT 1 FROM races r
+               WHERE r.race_key=race_archive_state.race_key AND r.race_status='COMPLETED'
+             ) THEN 'INCOMPLETE'
+             ELSE 'LIVE'
+           END,
+           archived_at=CASE
+             WHEN EXISTS(SELECT 1 FROM race_results rr WHERE rr.race_key=race_archive_state.race_key)
+              AND EXISTS(SELECT 1 FROM payouts p WHERE p.race_key=race_archive_state.race_key)
+              AND EXISTS(SELECT 1 FROM meta m WHERE m.key='odds_final_confirmed:'||race_archive_state.race_key)
+              AND EXISTS(
+                SELECT 1 FROM races r
+                WHERE r.race_key=race_archive_state.race_key
+                  AND r.weather IS NOT NULL AND r.track_condition IS NOT NULL
+              ) THEN COALESCE(archived_at,CURRENT_TIMESTAMP)
+             ELSE NULL
+           END,
+           updated_at=CURRENT_TIMESTAMP`,
+    );
+
+    await db.runAsync(
+      "INSERT OR IGNORE INTO schema_migrations(version,name) VALUES(2,'result-archive-foundation-v1')",
+    );
+  }
+
+  if (current < LIVE_SCHEMA_VERSION) {
+    await db.execAsync("PRAGMA user_version=" + LIVE_SCHEMA_VERSION);
+  }
+}
+
 export async function getLiveDb() {
   if (!dbPromise) {
     dbPromise = openDatabaseAsync("keiba-mobile-live.db").then(async (db) => {
@@ -208,6 +328,7 @@ export async function getLiveDb() {
         "UPDATE races SET race_status='COMPLETED',actual_date=COALESCE(actual_date,race_date) " +
         "WHERE EXISTS(SELECT 1 FROM race_results rr WHERE rr.race_key=races.race_key)",
       );
+      await applyLiveMigrations(db);
       return db;
     });
   }
