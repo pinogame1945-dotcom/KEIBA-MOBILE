@@ -43,6 +43,12 @@ function raceDateShort(iso: string) {
   return `${m}/${d}(${WEEKDAY[date.getDay()]})`;
 }
 
+function localClock(iso: string) {
+  const date = new Date(iso);
+  if (!Number.isFinite(date.getTime())) return "--:--";
+  return String(date.getHours()).padStart(2, "0") + ":" + String(date.getMinutes()).padStart(2, "0");
+}
+
 export function HomeScreen({ onOpenWeek, onOpenRace, active = true, cacheRevision = 0 }: Props) {
   const [notices, setNotices] = useState<RaceNotice[]>([]);
   const [races, setRaces] = useState<JraRace[]>([]);
@@ -171,7 +177,7 @@ export function HomeScreen({ onOpenWeek, onOpenRace, active = true, cacheRevisio
               <View style={styles.flex1}>
                 <View style={styles.inline}>
                   <Text style={styles.noticeRace}>{notice.raceNo > 0 ? notice.venue + " " + notice.raceNo + "R" : notice.venue + " 全体"}</Text>
-                  <Text style={styles.noticeTime}>{notice.observedAt.slice(11,16)}</Text>
+                  <Text style={styles.noticeTime}>{localClock(notice.observedAt)}</Text>
                 </View>
                 <Text style={styles.noticeTitle}>{noticeText(notice)}</Text>
                 <Text style={styles.noticeDetail}>{noticeDetail(notice)}</Text>
