@@ -69,8 +69,15 @@ assert.ok(
   storage.includes("withLiveDbWrite") &&
   storage.includes("withLiveDbTransaction") &&
   repository.includes("withLiveDbTransaction") &&
-  queue.includes("withLiveDbTransaction"),
+  queue.includes("withLiveDbTransaction") &&
+  !repository.includes("db.withTransactionAsync") &&
+  !queue.includes("db.withTransactionAsync"),
   "all LIVE mutations must share the serialized database write lane",
+);
+assert.ok(
+  !sync.includes("candidates.slice(0,16)") &&
+  sync.includes("if(refreshed>=4)break"),
+  "result repair must scan all overdue races while limiting actual successful repairs",
 );
 assert.ok(
   odds.includes("probeJraFinalOdds") &&
