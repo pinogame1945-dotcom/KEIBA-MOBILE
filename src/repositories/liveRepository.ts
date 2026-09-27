@@ -75,33 +75,6 @@ function scheduledDisplayRaces(target: ScheduleTarget | null, dates: string[]) {
   );
 }
 
-export async function saveScheduleMeetings(meetings: ScheduleMeeting[]) {
-  const db = await getLiveDb();
-  await db.withTransactionAsync(async () => {
-    for (const meeting of meetings) {
-      for (const race of meeting.races) {
-        const key = scheduleRaceKey(race.raceDate, race.venue, race.raceNo);
-        await db.runAsync(
-          `INSERT INTO races(
-            race_key,canonical_race_id,race_date,venue,race_no,race_name,race_class,start_time,
-            discipline,surface,distance_m,direction,weather,track_condition,source_url,fetched_at,status
-          ) VALUES(?,NULL,?,?,?,?,?,? ,?,?,?,NULL,NULL,NULL,?,?, 'SCHEDULED')
-          ON CONFLICT(race_key) DO UPDATE SET
-            race_name=CASE WHEN races.status='OFFICIAL' THEN races.race_name ELSE excluded.race_name END,
-            start_time=CASE WHEN races.status='OFFICIAL' THEN races.start_time ELSE excluded.start_time END,
-            discipline=CASE WHEN races.status='OFFICIAL' THEN races.discipline ELSE excluded.discipline END,
-            surface=CASE WHEN races.status='OFFICIAL' THEN races.surface ELSE excluded.surface END,
-            distance_m=CASE WHEN races.status='OFFICIAL' THEN races.distance_m ELSE excluded.distance_m END,
-            source_url=CASE WHEN races.status='OFFICIAL' THEN races.source_url ELSE excluded.source_url END,
-            fetched_at=CASE WHEN races.status='OFFICIAL' THEN races.fetched_at ELSE excluded.fetched_at END`,
-          key, race.raceDate, race.venue, race.raceNo, race.raceName, null, race.startTime,
-          race.discipline, race.surface, race.distanceM, race.sourceUrl, new Date().toISOString(),
-        );
-      }
-    }
-  });
-}
-
 function noticeKey(input: {
   raceKey: string; kind: string; horseNo?: number | null; previous?: string | null; next?: string | null;
 }) {
@@ -163,8 +136,16 @@ async function recordChanges(db: Awaited<ReturnType<typeof getLiveDb>>, card: Jr
 }
 
 async function writeOfficialCard(db: Awaited<ReturnType<typeof getLiveDb>>, card: JraRaceCard) {
-  await recordChanges(db, card);
+  const existingResult = await db.getFirstAsync<{ count: number }>(
+    "SELECT COUNT(*) AS count FROM race_results WHERE race_key=?",
+    card.race.raceKey,
+  );
+  const hasFinalResult = Number(existingResult?.count ?? 0) > 0;
+  if (!hasFinalResult) await recordChanges(db, card);
+
   const r = card.race;
+  const cardWeather = hasFinalResult ? null : r.weather;
+  const cardTrackCondition = hasFinalResult ? null : r.trackCondition;
   await db.runAsync(
     `INSERT INTO races(
       race_key,canonical_race_id,race_date,venue,race_no,race_name,race_class,start_time,
@@ -179,7 +160,7 @@ async function writeOfficialCard(db: Awaited<ReturnType<typeof getLiveDb>>, card
       track_condition=COALESCE(excluded.track_condition,races.track_condition),
       source_url=excluded.source_url,fetched_at=excluded.fetched_at,status='OFFICIAL'`,
     r.raceKey, r.canonicalRaceId, r.raceDate, r.venue, r.raceNo, r.raceName, r.raceClass, r.startTime,
-    r.discipline, r.surface, r.distanceM, r.direction, r.weather, r.trackCondition, r.sourceUrl, r.fetchedAt,
+    r.discipline, r.surface, r.distanceM, r.direction, cardWeather, cardTrackCondition, r.sourceUrl, r.fetchedAt,
   );
   await db.runAsync("DELETE FROM entries WHERE race_key=?", r.raceKey);
   for (const e of card.entries) {
@@ -555,36 +536,6 @@ function conditionForRace(race: JraRace, conditions: OfficialRaceConditions) {
     return conditions.turfCondition ?? conditions.dirtCondition;
   }
   return race.surface === "DIRT" ? conditions.dirtCondition : conditions.turfCondition;
-}
-
-export async function applyVenueConditions(
-  raceDate: string,
-  venue: string,
-  conditions: OfficialRaceConditions,
-) {
-  const db = await getLiveDb();
-  const races = await db.getAllAsync<JraRace>(
-    `SELECT ${raceSelect()} FROM races WHERE race_date=? AND venue=? AND status='OFFICIAL' ORDER BY race_no`,
-    raceDate, venue,
-  );
-  if (!races.length) return 0;
-  await db.withTransactionAsync(async () => {
-    for (const race of races) {
-      const nextWeather = conditions.weather;
-      const nextTrack = conditionForRace(race, conditions);
-      if (race.weather != null && nextWeather != null && race.weather !== nextWeather) {
-        await insertNotice(db, race, "WEATHER_CHANGED", race.weather, nextWeather);
-      }
-      if (race.trackCondition != null && nextTrack != null && race.trackCondition !== nextTrack) {
-        await insertNotice(db, race, "TRACK_CHANGED", race.trackCondition, nextTrack);
-      }
-      await db.runAsync(
-        `UPDATE races SET weather=COALESCE(?,weather),track_condition=COALESCE(?,track_condition) WHERE race_key=?`,
-        nextWeather,nextTrack,race.raceKey,
-      );
-    }
-  });
-  return races.length;
 }
 
 export async function saveOfficialRaceResult(
