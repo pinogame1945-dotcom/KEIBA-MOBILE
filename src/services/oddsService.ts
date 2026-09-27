@@ -92,9 +92,9 @@ export async function refreshLatestOdds(race: JraRace, entries: JraEntry[]) {
 
   const settlement = await getRaceResultCompleteness(race.raceKey);
   if (settlement.resultReady) {
+    const probe = await probeJraFinalOdds(race);
     const probeAt = new Date().toISOString();
     await markFinalOddsProbe(race.raceKey, probeAt);
-    const probe = await probeJraFinalOdds(race);
     if (!probe.isFinal) {
       const latest = await loadOddsMeta(race.raceKey);
       const missing = required.filter((type) => !latest.availableTypes.includes(type));
