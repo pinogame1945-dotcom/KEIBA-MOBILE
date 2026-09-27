@@ -9,7 +9,7 @@ import type {
 import { raceStartEpoch } from "../data/jra/oddsAvailability";
 import {
   getRace, getRacePayouts, getRaceResults, getVenueConditionSnapshot, getWeekEntries,
-  listRacesForDates, listRacingWeekRaces, localTodayIso,
+  listRaceNavigationGroup, listRacesForDates, localTodayIso,
 } from "../repositories/liveRepository";
 import { refreshRaceState } from "../services/raceRefreshService";
 import {
@@ -206,7 +206,7 @@ export function RaceCardScreen({
       getRaceResults(raceKey),
       getRacePayouts(raceKey),
       listRacesForDates([nextRace.raceDate]),
-      listRacingWeekRaces(),
+      listRaceNavigationGroup(nextRace.raceDate),
       getVenueConditionSnapshot(nextRace.raceDate, nextRace.venue),
     ]);
     setRace(nextRace);
