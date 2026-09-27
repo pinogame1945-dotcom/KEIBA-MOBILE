@@ -10,6 +10,7 @@ import {
 } from "./oddsAvailability";
 import { parseCombinationRows,parseWinPlaceRows } from "./oddsParser";
 import type { JraRace as JraWeekRace } from "../../domain/live";
+import { isJraFinalOddsHtml } from "./oddsFinalParser";
 
 type OddsAction={path:string;cname:string;label:string;rowText:string};
 type OddsActionResolution={actions:Map<JraOddsBetType,OddsAction>;visitedPages:number};
@@ -30,8 +31,8 @@ const primaryRefreshes=new Map<string,Promise<{
 function oddsSnapshotCheckpoint(race:JraWeekRace,nowMs:number){
   const start=raceStartEpoch(race);
   if(start==null)return "PRELOAD";
-  if(nowMs>=start+ODDS_FINAL_DELAY_MS)return "FINAL";
   const remaining=start-nowMs;
+  if(remaining<=0)return "POSTTIME";
   if(remaining<=5*60*1000)return "T5";
   if(remaining<=10*60*1000)return "T10";
   if(remaining<=30*60*1000)return "T30";
@@ -51,6 +52,22 @@ function discoverActions(html:string):OddsAction[]{
   });
   return out;
 }
+export async function probeJraFinalOdds(race:JraWeekRace){
+  const raceHtml=await fetchJraHtml(race.sourceUrl);
+  if(isJraFinalOddsHtml(raceHtml))return {isFinal:true,raceHtml,checkedPages:1};
+
+  const landing=discoverActions(raceHtml)
+    .find(action=>action.label.replace(/\s/g,"")==="オッズ");
+  if(!landing)return {isFinal:false,raceHtml,checkedPages:1};
+
+  const oddsHtml=await fetchJraPostHtml(landing.path,landing.cname);
+  return {
+    isFinal:isJraFinalOddsHtml(oddsHtml),
+    raceHtml,
+    checkedPages:2,
+  };
+}
+
 function classify(label:string):JraOddsBetType|null{
   const text=label.replace(/\s/g,"");
   if(/3連単|三連単/.test(text))return "TRIFECTA";
@@ -158,9 +175,10 @@ async function collectWithActions(
   actions:Map<JraOddsBetType,OddsAction>,
   visitedPages:number,
   onlyTypes?:Set<JraOddsBetType>,
+  checkpointOverride?:string|null,
 ){
   const observedAt=new Date().toISOString();
-  const checkpoint=oddsSnapshotCheckpoint(race,Date.parse(observedAt));
+  const checkpoint=checkpointOverride??oddsSnapshotCheckpoint(race,Date.parse(observedAt));
   const savedTypes=new Set<JraOddsBetType>();
   let rowCount=0;
   for(const [betType,action] of actions){
@@ -191,11 +209,12 @@ async function requiredBetTypes(race:JraWeekRace){
 async function refreshAllRaceOddsImpl(
   race:JraWeekRace,
   initialRaceHtml?:string,
+  checkpointOverride?:string|null,
 ){
   const required=await requiredBetTypes(race);
   let resolved=await cachedOrDiscoverActions(race,required,initialRaceHtml);
   const first=await collectWithActions(
-    race,resolved.actions,resolved.visitedPages,new Set(required),
+    race,resolved.actions,resolved.visitedPages,new Set(required),checkpointOverride,
   );
   let missing=required.filter(type=>!first.betTypes.includes(type));
   if(!missing.length){
@@ -207,7 +226,7 @@ async function refreshAllRaceOddsImpl(
   await clearOddsActionCacheTypes(race.raceKey,missing).catch(()=>undefined);
   resolved=await cachedOrDiscoverActions(race,required);
   const retry=await collectWithActions(
-    race,resolved.actions,resolved.visitedPages,new Set(missing),
+    race,resolved.actions,resolved.visitedPages,new Set(missing),checkpointOverride,
   );
   const betTypes=[...new Set([...first.betTypes,...retry.betTypes])];
   missing=required.filter(type=>!betTypes.includes(type));
@@ -222,10 +241,11 @@ async function refreshAllRaceOddsImpl(
 export function refreshAllRaceOdds(
   race:JraWeekRace,
   initialRaceHtml?:string,
+  checkpointOverride?:string|null,
 ){
   const existing=raceRefreshes.get(race.raceKey);
   if(existing)return existing;
-  const job=refreshAllRaceOddsImpl(race,initialRaceHtml)
+  const job=refreshAllRaceOddsImpl(race,initialRaceHtml,checkpointOverride)
     .finally(()=>{raceRefreshes.delete(race.raceKey);});
   raceRefreshes.set(race.raceKey,job);
   return job;
