@@ -10,10 +10,14 @@ import {
   listTodayRaces, localTodayIso, racingWeekCandidateDates, saveOfficialCard, saveOfficialMeeting, saveScheduleMeetings,
 } from "../repositories/liveRepository";
 import { raceStartEpoch } from "../data/jra/oddsAvailability";
+import {
+  claimNextRaceFetchItem, enqueueRaceFetchUrl, findRaceFetchUrl, finishRaceFetchRun,
+  getRaceFetchStats, markRaceFetchDone, markRaceFetchFailed, prepareRaceFetchRun,
+} from "./raceFetchQueue";
 
 const HOME = "https://www.jra.go.jp/";
 const THIS_WEEK = "https://www.jra.go.jp/keiba/thisweek/";
-const MAX_CARD_PAGES = 120;
+const MAX_CARD_PAGES = 160;
 
 export type RaceRefreshProgress = {
   phase: "SCHEDULE" | "DISCOVERY" | "CARDS" | "DONE";
@@ -24,6 +28,16 @@ export type RaceRefreshProgress = {
 
 function meetingKey(venue: string, meetingNo: number, meetingDay: number) {
   return venue + "|" + meetingNo + "|" + meetingDay;
+}
+
+function targetFingerprint(meetings: ScheduleMeeting[]) {
+  return meetings
+    .map((meeting) =>
+      [meeting.raceDate,meeting.venue,meeting.meetingNo,meeting.meetingDay,
+        meeting.races.map((race) => race.raceNo).sort((a,b) => a-b).join(",")].join(":")
+    )
+    .sort()
+    .join("|");
 }
 
 function targetMeeting(identity: ReturnType<typeof parseJraRaceIdentity>, meetings: ScheduleMeeting[]) {
@@ -40,20 +54,24 @@ function isTargetUrl(url: string, meetings: ScheduleMeeting[]) {
   return Boolean(targetMeeting(parseJraRaceIdentity(url), meetings));
 }
 
+function metadata(url: string) {
+  const identity = parseJraRaceIdentity(url);
+  return identity ? {
+    raceDate: identity.raceDate,
+    venue: identity.venue,
+    raceNo: identity.raceNo,
+  } : { raceDate: null, venue: null, raceNo: null };
+}
+
 async function discoverSeeds(meetings: ScheduleMeeting[], onProgress?: (p: RaceRefreshProgress) => void) {
   const seeds = new Set<string>();
   const targetKeys = new Set(meetings.map((meeting) => meetingKey(meeting.venue, meeting.meetingNo, meeting.meetingDay)));
-  const coveredKeys = () => {
-    const keys = new Set<string>();
+  const allMeetingsCovered = () => {
+    const covered = new Set<string>();
     for (const url of seeds) {
       const identity = parseJraRaceIdentity(url);
-      if (!identity) continue;
-      keys.add(meetingKey(identity.venue, identity.meetingNo, identity.meetingDay));
+      if (identity) covered.add(meetingKey(identity.venue, identity.meetingNo, identity.meetingDay));
     }
-    return keys;
-  };
-  const allMeetingsCovered = () => {
-    const covered = coveredKeys();
     return [...targetKeys].every((key) => covered.has(key));
   };
   const scanPage = async (url: string) => {
@@ -61,7 +79,7 @@ async function discoverSeeds(meetings: ScheduleMeeting[], onProgress?: (p: RaceR
     for (const link of discoverRaceCardLinks(html, url)) {
       if (isTargetUrl(link, meetings)) seeds.add(link);
     }
-    return { html, features: discoverFeatureLinks(html, url) };
+    return { features: discoverFeatureLinks(html, url) };
   };
 
   onProgress?.({ phase: "DISCOVERY", message: "JRA正式出馬表入口を確認", current: 0, total: 1 });
@@ -72,7 +90,9 @@ async function discoverSeeds(meetings: ScheduleMeeting[], onProgress?: (p: RaceR
 
   for (let i = 0; i < features.length && !allMeetingsCovered(); i += 1) {
     onProgress?.({ phase: "DISCOVERY", message: "正式出馬表リンクを探索", current: i + 1, total: features.length });
-    try { await scanPage(features[i]); } catch {}
+    try { await scanPage(features[i]); } catch (error) {
+      console.warn("JRA feature-page discovery failed", features[i], error);
+    }
   }
 
   if (!allMeetingsCovered()) {
@@ -83,11 +103,117 @@ async function discoverSeeds(meetings: ScheduleMeeting[], onProgress?: (p: RaceR
       ).slice(0, 10);
       for (const url of homeFeatures) {
         if (allMeetingsCovered()) break;
-        try { await scanPage(url); } catch {}
+        try { await scanPage(url); } catch (error) {
+          console.warn("JRA home discovery failed", url, error);
+        }
       }
-    } catch {}
+    } catch (error) {
+      console.warn("JRA home discovery unavailable", error);
+    }
   }
   return [...seeds];
+}
+
+type CandidateMeetings = Map<string, Map<number, JraRaceCard>>;
+type NavigationEvidence = Map<string, Map<string, number>>;
+
+function raceNoSignature(values: Iterable<number>) {
+  return [...new Set(values)].sort((a,b) => a-b).join(",");
+}
+
+function recordNavigationEvidence(
+  evidence: NavigationEvidence,
+  key: string,
+  raceNos: Iterable<number>,
+) {
+  const signature = raceNoSignature(raceNos);
+  if (!signature) return;
+  const group = evidence.get(key) ?? new Map<string, number>();
+  group.set(signature, (group.get(signature) ?? 0) + 1);
+  evidence.set(key, group);
+}
+
+function authoritativeRaceNos(meeting: ScheduleMeeting, navigation: NavigationEvidence) {
+  const key = meetingKey(meeting.venue, meeting.meetingNo, meeting.meetingDay);
+  const evidence = navigation.get(key);
+  if (!evidence?.size) return null;
+
+  const scheduleSignature = raceNoSignature(meeting.races.map((race) => race.raceNo));
+  const ranked = [...evidence.entries()]
+    .sort((a,b) => b[1] - a[1] || b[0].split(",").length - a[0].split(",").length);
+  for (const [signature,count] of ranked) {
+    if (signature === scheduleSignature || count >= 2) {
+      return signature.split(",").map(Number).filter(Number.isFinite);
+    }
+  }
+  return null;
+}
+
+async function drainQueue(
+  meetings: ScheduleMeeting[],
+  fingerprint: string,
+  onProgress?: (p: RaceRefreshProgress) => void,
+) {
+  const cards: CandidateMeetings = new Map();
+  const navigation: NavigationEvidence = new Map();
+  let processed = 0;
+
+  while (processed < MAX_CARD_PAGES) {
+    const item = await claimNextRaceFetchItem();
+    if (!item) break;
+    processed += 1;
+    onProgress?.({
+      phase: "CARDS",
+      message: "正式出馬表を検証",
+      current: processed,
+      total: Math.max((await getRaceFetchStats()).total, 1),
+    });
+
+    try {
+      const html = await fetchJraHtml(item.url);
+      const pageNavigation = new Map<string, Set<number>>();
+      for (const link of discoverRaceCardLinks(html, item.url)) {
+        const identity = parseJraRaceIdentity(link);
+        const meeting = targetMeeting(identity, meetings);
+        if (!identity || !meeting) continue;
+        const key = meetingKey(identity.venue, identity.meetingNo, identity.meetingDay);
+        const set = pageNavigation.get(key) ?? new Set<number>();
+        set.add(identity.raceNo);
+        pageNavigation.set(key, set);
+        const meta = metadata(link);
+        await enqueueRaceFetchUrl({ url: link, targetFingerprint: fingerprint, ...meta });
+      }
+
+      const own = parseJraRaceIdentity(item.url);
+      const ownMeeting = targetMeeting(own, meetings);
+      if (own && ownMeeting) {
+        const key = meetingKey(own.venue, own.meetingNo, own.meetingDay);
+        const set = pageNavigation.get(key) ?? new Set<number>();
+        set.add(own.raceNo);
+        pageNavigation.set(key, set);
+      }
+      for (const [key,raceNos] of pageNavigation) recordNavigationEvidence(navigation,key,raceNos);
+
+      if (own && ownMeeting) {
+        try {
+          const card = markOfficialNumberedRaceCard(html, parseRaceCard(html, item.url));
+          const key = meetingKey(own.venue, own.meetingNo, own.meetingDay);
+          const group = cards.get(key) ?? new Map<number, JraRaceCard>();
+          group.set(card.race.raceNo, card);
+          cards.set(key, group);
+          await markRaceFetchDone(item.url);
+        } catch (error) {
+          await markRaceFetchFailed(item.url, item.attempts, error);
+        }
+      } else {
+        await markRaceFetchDone(item.url);
+      }
+    } catch (error) {
+      await markRaceFetchFailed(item.url, item.attempts, error);
+    }
+  }
+
+  return { cards, navigation };
 }
 
 async function refreshRaceDates(
@@ -111,8 +237,8 @@ async function refreshRaceDates(
         meetings.push(...parsed);
         await saveScheduleMeetings(parsed);
       }
-    } catch {
-      // 非開催日や一時的な日程ページ欠落は他の日を止めない。
+    } catch (error) {
+      console.warn("JRA schedule refresh skipped", date, error);
     }
   }
 
@@ -121,100 +247,68 @@ async function refreshRaceDates(
     return { meetings: 0, officialSaved: 0, pendingMeetings: 0 };
   }
 
-  let seeds: string[] = [];
+  const fingerprint = targetFingerprint(meetings);
+  await prepareRaceFetchRun(fingerprint);
+
   try {
-    seeds = await discoverSeeds(meetings, onProgress);
-  } catch {
-    onProgress?.({
-      phase: "DONE",
-      message: "開催日程取得済み・正式出馬表の公開待ち",
-      current: 0,
-      total: meetings.length,
-    });
-    return { meetings: meetings.length, officialSaved: 0, pendingMeetings: meetings.length };
-  }
-
-  const queue = [...seeds];
-  const queued = new Set(queue);
-  const visited = new Set<string>();
-  const cards = new Map<string, Map<number, JraRaceCard>>();
-  const navigation = new Map<string, Set<number>>();
-
-  while (queue.length && visited.size < MAX_CARD_PAGES) {
-    const url = queue.shift()!;
-    if (visited.has(url)) continue;
-    visited.add(url);
-    onProgress?.({
-      phase: "CARDS",
-      message: "正式出馬表を検証",
-      current: visited.size,
-      total: Math.max(queued.size, 1),
-    });
-
-    let html: string;
-    try { html = await fetchJraHtml(url); } catch { continue; }
-
-    const own = parseJraRaceIdentity(url);
-    const ownMeeting = targetMeeting(own, meetings);
-    if (own && ownMeeting) {
-      const key = meetingKey(own.venue, own.meetingNo, own.meetingDay);
-      const set = navigation.get(key) ?? new Set<number>();
-      set.add(own.raceNo);
-      navigation.set(key, set);
-    }
-
-    for (const link of discoverRaceCardLinks(html, url)) {
-      const identity = parseJraRaceIdentity(link);
-      const meeting = targetMeeting(identity, meetings);
-      if (!identity || !meeting) continue;
-      const key = meetingKey(identity.venue, identity.meetingNo, identity.meetingDay);
-      const set = navigation.get(key) ?? new Set<number>();
-      set.add(identity.raceNo);
-      navigation.set(key, set);
-      if (!queued.has(link) && !visited.has(link)) {
-        queued.add(link);
-        queue.push(link);
+    const stats = await getRaceFetchStats();
+    if (stats.total === 0) {
+      const seeds = await discoverSeeds(meetings, onProgress);
+      for (const url of seeds) {
+        await enqueueRaceFetchUrl({ url, targetFingerprint: fingerprint, ...metadata(url) });
+      }
+      if (!seeds.length) {
+        await finishRaceFetchRun(true);
+        onProgress?.({
+          phase: "DONE",
+          message: "開催日程取得済み・正式出馬表の公開待ち",
+          current: 0,
+          total: meetings.length,
+        });
+        return { meetings: meetings.length, officialSaved: 0, pendingMeetings: meetings.length };
       }
     }
 
-    if (!ownMeeting || !own) continue;
-    try {
-      const card = markOfficialNumberedRaceCard(html, parseRaceCard(html, url));
-      const key = meetingKey(own.venue, own.meetingNo, own.meetingDay);
-      const group = cards.get(key) ?? new Map<number, JraRaceCard>();
-      group.set(card.race.raceNo, card);
-      cards.set(key, group);
-    } catch {
-      // 未確定・一時欠落ページは保存しない。
-    }
-  }
+    const discovery = await drainQueue(meetings, fingerprint, onProgress);
+    let officialSaved = 0;
+    let pendingMeetings = 0;
 
-  let officialSaved = 0;
-  let pendingMeetings = 0;
-  for (const meeting of meetings) {
-    const key = meetingKey(meeting.venue, meeting.meetingNo, meeting.meetingDay);
-    const expected = [...new Set(meeting.races.map((race) => race.raceNo))].sort((a,b) => a-b);
-    const group = cards.get(key) ?? new Map<number, JraRaceCard>();
-    if (!expected.length || !expected.every((no) => group.has(no))) {
-      pendingMeetings += 1;
-      continue;
+    for (const meeting of meetings) {
+      const key = meetingKey(meeting.venue, meeting.meetingNo, meeting.meetingDay);
+      const expected = authoritativeRaceNos(meeting, discovery.navigation);
+      const group = discovery.cards.get(key) ?? new Map<number, JraRaceCard>();
+      if (!expected?.length || !expected.every((raceNo) => group.has(raceNo))) {
+        pendingMeetings += 1;
+        continue;
+      }
+      const meetingCards = expected.map((raceNo) => group.get(raceNo)!).filter(Boolean);
+      if (meetingCards.length !== expected.length) {
+        pendingMeetings += 1;
+        continue;
+      }
+      try {
+        await saveOfficialMeeting(meetingCards, expected);
+        officialSaved += meetingCards.length;
+      } catch (error) {
+        pendingMeetings += 1;
+        console.warn("Verified JRA meeting save deferred", key, error);
+      }
     }
-    const meetingCards = expected.map((no) => group.get(no)!).filter(Boolean);
-    try {
-      await saveOfficialMeeting(meetingCards, expected);
-      officialSaved += meetingCards.length;
-    } catch {
-      pendingMeetings += 1;
-    }
-  }
 
-  onProgress?.({
-    phase: "DONE",
-    message: officialSaved ? officialSaved + "Rの正式出馬表を更新" : "開催日程取得済み・正式出馬表の完成待ち",
-    current: meetings.length - pendingMeetings,
-    total: meetings.length,
-  });
-  return { meetings: meetings.length, officialSaved, pendingMeetings };
+    await finishRaceFetchRun(true);
+    onProgress?.({
+      phase: "DONE",
+      message: officialSaved
+        ? officialSaved + "Rの正式出馬表を更新"
+        : "開催日程取得済み・正式出馬表の完成待ち",
+      current: meetings.length - pendingMeetings,
+      total: meetings.length,
+    });
+    return { meetings: meetings.length, officialSaved, pendingMeetings };
+  } catch (error) {
+    await finishRaceFetchRun(false, error instanceof Error ? error.message : String(error)).catch(() => undefined);
+    throw error;
+  }
 }
 
 export function refreshTodayRaceData(onProgress?: (p: RaceRefreshProgress) => void) {
@@ -226,16 +320,26 @@ export function refreshCurrentWeekRaceData(onProgress?: (p: RaceRefreshProgress)
 }
 
 export async function refreshRaceState(race: JraRace) {
-  if (race.status !== "OFFICIAL" || !race.sourceUrl.includes("/JRADB/accessD.html")) {
-    throw new Error("正式出馬表URLがまだ取得されていない");
+  let sourceUrl = race.status === "OFFICIAL" && race.sourceUrl.includes("/JRADB/accessD.html")
+    ? race.sourceUrl
+    : null;
+  let queuedError: string | null = null;
+  if (!sourceUrl) {
+    const queued = await findRaceFetchUrl(race.raceDate, race.venue, race.raceNo);
+    sourceUrl = queued?.url ?? null;
+    queuedError = queued?.lastError ?? null;
   }
-  const html = await fetchJraHtml(race.sourceUrl);
-  const card = markOfficialNumberedRaceCard(html, parseRaceCard(html, race.sourceUrl));
+  if (!sourceUrl) {
+    throw new Error(queuedError || "正式出馬表URLをまだ発見できていない。今週のレースを更新する。");
+  }
+  const html = await fetchJraHtml(sourceUrl);
+  const card = markOfficialNumberedRaceCard(html, parseRaceCard(html, sourceUrl));
   await saveOfficialCard(card);
   return card;
 }
 
 function dueIntervalMs(race: JraRace, nowMs: number) {
+  if (race.status !== "OFFICIAL") return 2 * 60 * 1000;
   const start = raceStartEpoch(race);
   if (start == null) return 30 * 60 * 1000;
   const remaining = start - nowMs;
@@ -252,14 +356,17 @@ export function refreshDueRaceStates() {
     const now = Date.now();
     const races = await listTodayRaces();
     const candidates = races.filter((race) => {
-      if (race.status !== "OFFICIAL") return false;
-      const start = raceStartEpoch(race);
-      if (start != null && start <= now) return false;
+      if (race.status === "OFFICIAL") {
+        const start = raceStartEpoch(race);
+        if (start != null && start <= now) return false;
+      }
       const fetchedAt = Date.parse(race.fetchedAt);
       return !Number.isFinite(fetchedAt) || now - fetchedAt >= dueIntervalMs(race, now);
     });
     for (const race of candidates.slice(0, 2)) {
-      try { await refreshRaceState(race); } catch {}
+      try { await refreshRaceState(race); } catch (error) {
+        console.warn("JRA race-state refresh failed", race.raceKey, error);
+      }
     }
   })().finally(() => { dueSweep = null; });
   return dueSweep;

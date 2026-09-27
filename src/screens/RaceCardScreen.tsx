@@ -171,6 +171,7 @@ export function RaceCardScreen({
   const [nowMs, setNowMs] = useState(Date.now());
   const autoOddsStarted = useRef(false);
   const autoResultRaceKey = useRef<string | null>(null);
+  const autoCardRepairRaceKey = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     const nextRace = await getRace(raceKey);
@@ -212,6 +213,7 @@ export function RaceCardScreen({
   useEffect(() => {
     autoOddsStarted.current = false;
     autoResultRaceKey.current = null;
+    autoCardRepairRaceKey.current = null;
     setDetailHorseNo(null);
     setRaceTab("CARD");
     setOddsView("NORMAL");
@@ -267,6 +269,17 @@ export function RaceCardScreen({
     active,cacheRevision,raceKey,raceTab,selectedType,oddsView,selectedHorseNo,
     oddsPage,entries,latestObservedAt,
   ]);
+
+  useEffect(() => {
+    if (!active || !race || race.status === "OFFICIAL" || busy || autoCardRepairRaceKey.current === race.raceKey) return;
+    autoCardRepairRaceKey.current = race.raceKey;
+    setBusy("race");
+    setError(null);
+    void refreshRaceState(race)
+      .then(load)
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(null));
+  }, [active, race, busy, load]);
 
   useEffect(() => {
     if (!active || !race || race.status !== "OFFICIAL" || !entries.length || autoOddsStarted.current) return;
@@ -435,7 +448,12 @@ export function RaceCardScreen({
             </View>
 
             {race.status !== "OFFICIAL" ? (
-              <View style={styles.card}><Text style={styles.muted}>{status === "データ修復中" ? "正式出馬表を自動修復中。" : "正式出馬表の公開待ち。"}</Text></View>
+              <View style={styles.card}>
+                <Text style={styles.muted}>{status === "データ修復中" ? "正式出馬表を自動修復中。" : "正式出馬表の公開待ち。"}</Text>
+                <TouchableOpacity style={styles.inlineButton} onPress={() => void refreshCard()} disabled={busy != null}>
+                  <Text style={styles.inlineButtonText}>{busy === "race" ? "修復中" : "出馬表を再取得"}</Text>
+                </TouchableOpacity>
+              </View>
             ) : !entries.length ? (
               <View style={styles.card}>
                 <Text style={styles.muted}>出走馬データがない。出馬表を再取得する。</Text>

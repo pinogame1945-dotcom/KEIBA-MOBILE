@@ -23,6 +23,8 @@ jobs:
         run: npm install --no-audit --no-fund
       - name: Foundation contract
         run: npm run foundation:contract
+      - name: LIVE data contract
+        run: npm run live-data:contract
       - name: Typecheck
         run: npm run typecheck
       - name: Expo config smoke

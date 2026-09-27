@@ -66,6 +66,20 @@ CREATE TABLE IF NOT EXISTS notices (
 );
 CREATE INDEX IF NOT EXISTS idx_notices_date ON notices(race_date, observed_at DESC);
 
+CREATE TABLE IF NOT EXISTS race_fetch_queue (
+  url TEXT PRIMARY KEY,
+  target_fingerprint TEXT NOT NULL,
+  status TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  race_date TEXT,
+  venue TEXT,
+  race_no INTEGER,
+  last_error TEXT,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_race_fetch_queue_target_status
+  ON race_fetch_queue(target_fingerprint,status,race_date,venue,race_no);
+
 CREATE TABLE IF NOT EXISTS odds_current (
   race_key TEXT NOT NULL,
   bet_type TEXT NOT NULL,
