@@ -568,7 +568,7 @@ const styles = StyleSheet.create({
   horseOddsSub: { color: "#6b7280", fontSize: 10, marginTop: 1, fontWeight: "700" },
 
   modalRoot: { flex: 1, justifyContent: "flex-end" },
-  modalBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.34)" },
+  modalBackdrop: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, backgroundColor: "rgba(0,0,0,0.34)" },
   bottomSheet: { backgroundColor: "#111827", borderTopLeftRadius: 26, borderTopRightRadius: 26, padding: 18, paddingBottom: 34 },
   sheetHandle: { width: 46, height: 4, borderRadius: 2, backgroundColor: "#4b5563", alignSelf: "center", marginBottom: 16 },
   sheetHorseNo: { width: 46, borderLeftWidth: 6, paddingLeft: 7 },
