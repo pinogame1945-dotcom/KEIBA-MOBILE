@@ -33,6 +33,8 @@ jobs:
         run: npm run result-archive:contract
       - name: Result archive guard regression
         run: npm run smoke:result-archive-guard
+      - name: Stored race week regression
+        run: npm run smoke:race-archive-week
       - name: Reschedule runtime regression
         run: npm run smoke:reschedule
       - name: JRA schedule disruption regression
