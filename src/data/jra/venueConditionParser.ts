@@ -65,7 +65,7 @@ export function parseVenueConditionPage(
   const parsed = {
     venue,
     raceDate: isoDate(headingWindow),
-    observedLabel: block.match(/馬場状態（([^）]+現在)）/)?.[1] ?? null,
+    observedLabel: block.match(/馬場状態（(.+?現在)）/)?.[1] ?? null,
     weather: block.match(/天候[：:]?\s*(晴|曇|雨|小雨|雪|小雪)/)?.[1] ?? null,
     turfCondition: block.match(/芝\s*(良|稍重|重|不良)/)?.[1] ?? null,
     dirtCondition: block.match(/ダート\s*(良|稍重|重|不良)/)?.[1] ?? null,
