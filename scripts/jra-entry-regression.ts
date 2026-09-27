@@ -5,7 +5,8 @@ const rows=Array.from({length:10},(_,i)=>{
   const no=i+1;
   const gate=inferGateFromHorseNo(no,10);
   const gateCell=(no===8||no===10)?"":`<td rowspan="${no===7||no===9?2:1}"><img alt="枠${gate}"></td>`;
-  return `<tr>${gateCell}<td>${no}</td><td><a href="/owner/${no}">馬主${no}</a><a href="/horse/${no}">テストホース${no}</a> ${3+no/10} (${no}番人気)</td><td>牡2 / 鹿 55 kg</td><td><a href="/misc/${no}">他${no}</a><a href="/jockey/${no}">騎手${no}</a></td><td><a href="/trainer/${no}">調教師${no}</a></td></tr>`;
+  const horseNoCell=no%2===0?`<td><img alt="馬番${no}"></td>`:`<td>${no}</td>`;
+  return `<tr>${gateCell}${horseNoCell}<td><a href="/owner/${no}">馬主${no}</a><a href="/horse/${no}">テストホース${no}</a> ${3+no/10} (${no}番人気)</td><td>牡2 / 鹿 55 kg</td><td><a href="/misc/${no}">他${no}</a><a href="/jockey/${no}">騎手${no}</a></td><td><a href="/trainer/${no}">調教師${no}</a></td></tr>`;
 }).join("");
 
 const html=`
