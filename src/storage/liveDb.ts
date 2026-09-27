@@ -9,6 +9,12 @@ CREATE TABLE IF NOT EXISTS races (
   race_key TEXT PRIMARY KEY,
   canonical_race_id TEXT,
   race_date TEXT NOT NULL,
+  scheduled_date TEXT,
+  actual_date TEXT,
+  race_status TEXT NOT NULL DEFAULT 'SCHEDULED',
+  schedule_status TEXT NOT NULL DEFAULT 'ACTIVE',
+  superseded_by_race_key TEXT,
+  archived_at TEXT,
   venue TEXT NOT NULL,
   race_no INTEGER NOT NULL,
   race_name TEXT,
@@ -25,6 +31,7 @@ CREATE TABLE IF NOT EXISTS races (
   status TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_races_date_venue ON races(race_date, venue, race_no);
+CREATE INDEX IF NOT EXISTS idx_races_canonical_schedule ON races(canonical_race_id, schedule_status, race_date);
 
 CREATE TABLE IF NOT EXISTS entries (
   race_key TEXT NOT NULL,
@@ -120,6 +127,8 @@ CREATE TABLE IF NOT EXISTS odds_history (
   observed_at TEXT NOT NULL,
   source_url TEXT,
   checkpoint TEXT,
+  invalidated_at TEXT,
+  invalidated_reason TEXT,
   UNIQUE (race_key, bet_type, selection_1, selection_2, selection_3, observed_at)
 );
 
@@ -167,14 +176,39 @@ CREATE TABLE IF NOT EXISTS meta (
 
 let writeTail: Promise<void> = Promise.resolve();
 
+async function addColumnIfMissing(
+  db: SQLiteDatabase,
+  table: string,
+  column: string,
+  sql: string,
+) {
+  const columns = await db.getAllAsync<{ name: string }>("PRAGMA table_info(" + table + ")");
+  if (!columns.some((item) => item.name === column)) await db.execAsync(sql);
+}
+
 export async function getLiveDb() {
   if (!dbPromise) {
     dbPromise = openDatabaseAsync("keiba-mobile-live.db").then(async (db) => {
       await db.execAsync(SCHEMA);
-      const resultColumns = await db.getAllAsync<{ name: string }>("PRAGMA table_info(race_results)");
-      if (!resultColumns.some((column) => column.name === "average_1f")) {
-        await db.execAsync("ALTER TABLE race_results ADD COLUMN average_1f REAL");
-      }
+      await addColumnIfMissing(db,"race_results","average_1f","ALTER TABLE race_results ADD COLUMN average_1f REAL");
+      await addColumnIfMissing(db,"races","scheduled_date","ALTER TABLE races ADD COLUMN scheduled_date TEXT");
+      await addColumnIfMissing(db,"races","actual_date","ALTER TABLE races ADD COLUMN actual_date TEXT");
+      await addColumnIfMissing(db,"races","race_status","ALTER TABLE races ADD COLUMN race_status TEXT NOT NULL DEFAULT 'SCHEDULED'");
+      await addColumnIfMissing(db,"races","schedule_status","ALTER TABLE races ADD COLUMN schedule_status TEXT NOT NULL DEFAULT 'ACTIVE'");
+      await addColumnIfMissing(db,"races","superseded_by_race_key","ALTER TABLE races ADD COLUMN superseded_by_race_key TEXT");
+      await addColumnIfMissing(db,"races","archived_at","ALTER TABLE races ADD COLUMN archived_at TEXT");
+      await addColumnIfMissing(db,"odds_history","invalidated_at","ALTER TABLE odds_history ADD COLUMN invalidated_at TEXT");
+      await addColumnIfMissing(db,"odds_history","invalidated_reason","ALTER TABLE odds_history ADD COLUMN invalidated_reason TEXT");
+      await db.execAsync(
+        "CREATE INDEX IF NOT EXISTS idx_races_canonical_schedule ON races(canonical_race_id,schedule_status,race_date)",
+      );
+      await db.execAsync(
+        "UPDATE races SET scheduled_date=COALESCE(scheduled_date,race_date) WHERE scheduled_date IS NULL",
+      );
+      await db.execAsync(
+        "UPDATE races SET race_status='COMPLETED',actual_date=COALESCE(actual_date,race_date) " +
+        "WHERE EXISTS(SELECT 1 FROM race_results rr WHERE rr.race_key=races.race_key)",
+      );
       return db;
     });
   }
