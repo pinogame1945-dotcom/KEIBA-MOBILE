@@ -15,6 +15,7 @@ import {
   loadLatestWinOdds,loadOddsMeta,loadOddsRows,oddsBetTypeLabel,refreshLatestOdds,
 } from "../services/oddsService";
 import { refreshOfficialRaceResult } from "../services/resultService";
+import { refreshTodayVenueConditions } from "../services/venueConditionService";
 import { raceCourseLabel, raceStateLabel } from "../ui/raceLabels";
 
 type Props = {
@@ -36,6 +37,7 @@ const TYPE_ORDER: OddsBetType[] = [
 const HORSE_RANK_TYPES: OddsBetType[] = [
   "BRACKET_QUINELLA","QUINELLA","WIDE","EXACTA","TRIO","TRIFECTA",
 ];
+const ODDS_PAGE_SIZE = 80;
 
 const GATE_COLORS: Record<number, { bg: string; fg: string; border: string }> = {
   1: { bg: "#ffffff", fg: "#111827", border: "#9ca3af" },
@@ -151,6 +153,8 @@ export function RaceCardScreen({
   const [entries, setEntries] = useState<JraEntry[]>([]);
   const [dayRaces, setDayRaces] = useState<JraRace[]>([]);
   const [odds, setOdds] = useState<OddsRow[]>([]);
+  const [oddsPage, setOddsPage] = useState(0);
+  const [oddsHasNext, setOddsHasNext] = useState(false);
   const [availableTypes, setAvailableTypes] = useState<OddsBetType[]>([]);
   const [latestWinByNo, setLatestWinByNo] = useState<Map<number, number>>(() => new Map());
   const [latestObservedAt, setLatestObservedAt] = useState<string | null>(null);
@@ -228,6 +232,10 @@ export function RaceCardScreen({
   }, [active]);
 
   useEffect(() => {
+    setOddsPage(0);
+  }, [raceKey, selectedType, oddsView, selectedHorseNo]);
+
+  useEffect(() => {
     if (!active || raceTab !== "ODDS") return;
     const selectedHorse = entries.find((entry) => entry.horseNo === selectedHorseNo) ?? null;
     const selection = oddsView === "HORSE"
@@ -237,16 +245,27 @@ export function RaceCardScreen({
       : null;
     if (oddsView === "HORSE" && selection == null) {
       setOdds([]);
+      setOddsHasNext(false);
       return;
     }
     let cancelled = false;
-    void loadOddsRows(raceKey, selectedType, selection, 120)
-      .then((rows) => { if (!cancelled) setOdds(rows); })
-      .catch(() => { if (!cancelled) setOdds([]); });
+    const offset = oddsPage * ODDS_PAGE_SIZE;
+    void loadOddsRows(raceKey, selectedType, selection, ODDS_PAGE_SIZE + 1, offset)
+      .then((rows) => {
+        if (cancelled) return;
+        setOdds(rows.slice(0, ODDS_PAGE_SIZE));
+        setOddsHasNext(rows.length > ODDS_PAGE_SIZE);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setOdds([]);
+          setOddsHasNext(false);
+        }
+      });
     return () => { cancelled = true; };
   }, [
     active,cacheRevision,raceKey,raceTab,selectedType,oddsView,selectedHorseNo,
-    entries,latestObservedAt,
+    oddsPage,entries,latestObservedAt,
   ]);
 
   useEffect(() => {
@@ -289,7 +308,11 @@ export function RaceCardScreen({
   const refreshCard = async () => {
     if (!race || busy) return;
     setBusy("race"); setError(null);
-    try { await refreshRaceState(race); await load(); }
+    try {
+      await refreshRaceState(race);
+      await refreshTodayVenueConditions().catch(() => undefined);
+      await load();
+    }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(null); }
   };
@@ -341,21 +364,6 @@ export function RaceCardScreen({
           <View style={[styles.topSide, styles.topRight]}><Text style={styles.liveText}>● LIVE</Text></View>
         </View>
 
-        <View style={styles.hero}>
-          <View style={styles.rowBetween}>
-            <View style={styles.flex1}>
-              <View style={styles.inline}>
-                <Text style={styles.heroTime}>{race.startTime ?? "--:--"}</Text>
-                <Text style={styles.heroTitle}>{race.raceName ?? "レース名取得待ち"}</Text>
-              </View>
-              <Text style={styles.heroMeta}>
-                {[race.raceClass, raceCourseLabel(race), race.weather, race.trackCondition].filter(Boolean).join("　")}
-              </Text>
-            </View>
-            <View style={styles.statusPill}><Text style={styles.statusText}>{status}</Text></View>
-          </View>
-        </View>
-
         <View style={styles.raceNavigator}>
           <TouchableOpacity
             style={[styles.raceNavSide, !previousRace && styles.disabled]}
@@ -374,6 +382,21 @@ export function RaceCardScreen({
           >
             <Text style={styles.raceNavText}>{nextRace ? nextRace.raceNo + "R" : "次R"} ›</Text>
           </TouchableOpacity>
+        </View>
+
+        <View style={styles.hero}>
+          <View style={styles.rowBetween}>
+            <View style={styles.flex1}>
+              <View style={styles.inline}>
+                <Text style={styles.heroTime}>{race.startTime ?? "--:--"}</Text>
+                <Text style={styles.heroTitle}>{race.raceName ?? "レース名取得待ち"}</Text>
+              </View>
+              <Text style={styles.heroMeta}>
+                {[race.raceClass, raceCourseLabel(race), race.weather, race.trackCondition].filter(Boolean).join("　")}
+              </Text>
+            </View>
+            <View style={styles.statusPill}><Text style={styles.statusText}>{status}</Text></View>
+          </View>
         </View>
 
         <View style={styles.raceTabs}>
@@ -468,22 +491,33 @@ export function RaceCardScreen({
                 })}
               </View>
             )}
+
+            {(oddsPage > 0 || oddsHasNext) ? (
+              <View style={styles.oddsPager}>
+                <TouchableOpacity
+                  style={[styles.oddsPagerButton, oddsPage === 0 && styles.disabled]}
+                  disabled={oddsPage === 0}
+                  onPress={() => setOddsPage((page) => Math.max(0, page - 1))}
+                >
+                  <Text style={styles.oddsPagerButtonText}>‹ 前</Text>
+                </TouchableOpacity>
+                <Text style={styles.oddsPagerText}>
+                  {oddsPage * ODDS_PAGE_SIZE + 1}〜{oddsPage * ODDS_PAGE_SIZE + displayedOdds.length}件
+                </Text>
+                <TouchableOpacity
+                  style={[styles.oddsPagerButton, !oddsHasNext && styles.disabled]}
+                  disabled={!oddsHasNext}
+                  onPress={() => setOddsPage((page) => page + 1)}
+                >
+                  <Text style={styles.oddsPagerButtonText}>次 ›</Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
           </>
         ) : null}
 
         {raceTab === "ODDS" ? (
           <>
-            <View style={styles.oddsFresh}>
-              <View>
-                <Text style={styles.oddsFreshLabel}>最新オッズ</Text>
-                <Text style={styles.oddsFreshTime}>最終取得 {formatClock(latestObservedAt)}</Text>
-                <Text style={styles.oddsFreshAgo}>{freshnessText(latestObservedAt, nowMs)}</Text>
-              </View>
-              <TouchableOpacity style={styles.oddsRefreshButton} onPress={() => void refreshOdds()} disabled={busy != null || race.status !== "OFFICIAL"}>
-                <Text style={styles.oddsRefreshText}>{busy === "odds" ? "取得中" : "更新 ↻"}</Text>
-              </TouchableOpacity>
-            </View>
-
             <View style={styles.oddsModeTabs}>
               <TouchableOpacity style={[styles.oddsModeTab, oddsView === "NORMAL" && styles.oddsModeTabActive]} onPress={() => setOddsView("NORMAL")}>
                 <Text style={[styles.oddsModeText, oddsView === "NORMAL" && styles.oddsModeTextActive]}>通常オッズ</Text>
@@ -498,6 +532,19 @@ export function RaceCardScreen({
                 }}
               >
                 <Text style={[styles.oddsModeText, oddsView === "HORSE" && styles.oddsModeTextActive]}>馬別ランキング</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.oddsStatus}>
+              <Text style={styles.oddsStatusText}>
+                最終取得 {formatClock(latestObservedAt)}{latestObservedAt ? "　" + freshnessText(latestObservedAt, nowMs) : ""}
+              </Text>
+              <TouchableOpacity
+                style={styles.oddsStatusButton}
+                onPress={() => void refreshOdds()}
+                disabled={busy != null || race.status !== "OFFICIAL"}
+              >
+                <Text style={styles.oddsStatusButtonText}>{busy === "odds" ? "取得中" : "↻ 更新"}</Text>
               </TouchableOpacity>
             </View>
 
@@ -541,7 +588,7 @@ export function RaceCardScreen({
               <View style={styles.oddsTable}>
                 {displayedOdds.map((row, index) => (
                   <View key={[row.betType,row.selection1,row.selection2,row.selection3].join(":")} style={[styles.oddsRow, index > 0 && styles.borderTop]}>
-                    {oddsView === "HORSE" ? <View style={styles.oddsRank}><Text style={styles.oddsRankText}>{index + 1}</Text></View> : null}
+                    {oddsView === "HORSE" ? <View style={styles.oddsRank}><Text style={styles.oddsRankText}>{oddsPage * ODDS_PAGE_SIZE + index + 1}</Text></View> : null}
                     <Text style={styles.selection}>{formatSelection(row)}</Text>
                     <Text style={styles.price}>{formatOdds(row)}</Text>
                   </View>
@@ -560,8 +607,8 @@ export function RaceCardScreen({
             <View style={styles.infoRow}><Text style={styles.infoKey}>発走</Text><Text style={styles.infoValue}>{race.startTime ?? "-"}</Text></View>
             <View style={styles.infoRow}><Text style={styles.infoKey}>条件</Text><Text style={styles.infoValue}>{race.raceClass ?? "-"}</Text></View>
             <View style={styles.infoRow}><Text style={styles.infoKey}>コース</Text><Text style={styles.infoValue}>{raceCourseLabel(race) || "-"}</Text></View>
-            <View style={styles.infoRow}><Text style={styles.infoKey}>天候</Text><Text style={styles.infoValue}>{race.weather ?? "-"}</Text></View>
-            <View style={styles.infoRow}><Text style={styles.infoKey}>馬場</Text><Text style={styles.infoValue}>{race.trackCondition ?? "-"}</Text></View>
+            <View style={styles.infoRow}><Text style={styles.infoKey}>天候</Text><Text style={styles.infoValue}>{race.weather ?? "取得待ち"}</Text></View>
+            <View style={styles.infoRow}><Text style={styles.infoKey}>馬場</Text><Text style={styles.infoValue}>{race.trackCondition ?? "取得待ち"}</Text></View>
             <View style={styles.infoRow}><Text style={styles.infoKey}>出走</Text><Text style={styles.infoValue}>{entries.filter((entry) => entry.entryStatus === "ACTIVE").length || "-"}頭</Text></View>
             <TouchableOpacity style={styles.cardRefresh} onPress={() => void refreshCard()} disabled={busy != null || race.status !== "OFFICIAL"}>
               <Text style={styles.cardRefreshText}>{busy === "race" ? "更新中" : "出馬表・馬場状態を更新 ↻"}</Text>
@@ -597,7 +644,11 @@ export function RaceCardScreen({
                       <View style={styles.resultTimeBox}>
                         <Text style={styles.resultTime}>{result.finishTime ?? "-"}</Text>
                         <Text style={styles.resultSub}>{result.margin ? "着差 " + result.margin : ""}</Text>
-                        <Text style={styles.resultSub}>{result.last3f != null ? "上がり " + result.last3f.toFixed(1) : ""}</Text>
+                        <Text style={styles.resultSub}>
+                          {race.discipline === "OBSTACLE"
+                            ? result.average1f != null ? "平均1F " + result.average1f.toFixed(1) : ""
+                            : result.last3f != null ? "上がり " + result.last3f.toFixed(1) : ""}
+                        </Text>
                       </View>
                     </View>
                   );
@@ -622,7 +673,11 @@ export function RaceCardScreen({
               {busy === "result" ? <ActivityIndicator /> : null}
               <Text style={styles.resultEmptyTitle}>{isFuture ? "結果はレース終了後に表示" : "JRA公式結果を確認中"}</Text>
               <Text style={styles.resultEmptySub}>
-                {isFuture ? "確定後、着順・上がり3F・払戻をここに表示する。" : "結果が公開済みなら取得して保存する。"}
+                {isFuture
+                  ? race.discipline === "OBSTACLE"
+                    ? "確定後、着順・平均1F・払戻をここに表示する。"
+                    : "確定後、着順・上がり3F・払戻をここに表示する。"
+                  : "結果が公開済みなら取得して保存する。"}
               </Text>
               {!isFuture ? (
                 <TouchableOpacity style={styles.resultButton} onPress={() => void refreshResult()} disabled={busy != null}>
@@ -718,12 +773,10 @@ const styles = StyleSheet.create({
   detailValue: { color: "#fff", fontSize: 13, fontWeight: "800", flex: 1 },
   horseOddsJump: { marginTop: 17, backgroundColor: "#fff", borderRadius: 15, paddingVertical: 14, alignItems: "center" },
   horseOddsJumpText: { color: "#111827", fontSize: 12, fontWeight: "900" },
-  oddsFresh: { backgroundColor: "#111827", borderRadius: 17, padding: 15, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  oddsFreshLabel: { color: "#9ca3af", fontSize: 10, fontWeight: "900" },
-  oddsFreshTime: { color: "#fff", fontSize: 16, fontWeight: "900", marginTop: 2 },
-  oddsFreshAgo: { color: "#9ca3af", fontSize: 9, fontWeight: "700", marginTop: 2 },
-  oddsRefreshButton: { backgroundColor: "#374151", borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10 },
-  oddsRefreshText: { color: "#fff", fontSize: 11, fontWeight: "900" },
+  oddsStatus: { minHeight: 34, backgroundColor: "#fff", borderRadius: 11, paddingHorizontal: 11, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  oddsStatusText: { color: "#6b7280", fontSize: 10, fontWeight: "800" },
+  oddsStatusButton: { paddingHorizontal: 8, paddingVertical: 7 },
+  oddsStatusButtonText: { color: "#111827", fontSize: 10, fontWeight: "900" },
   oddsModeTabs: { flexDirection: "row", backgroundColor: "#e5e7eb", borderRadius: 14, padding: 4 },
   oddsModeTab: { flex: 1, minHeight: 44, alignItems: "center", justifyContent: "center", borderRadius: 11 },
   oddsModeTabActive: { backgroundColor: "#fff" },
@@ -742,6 +795,10 @@ const styles = StyleSheet.create({
   typeChipActive: { backgroundColor: "#111827" },
   typeText: { color: "#4b5563", fontSize: 11, fontWeight: "900" },
   typeTextActive: { color: "#fff" },
+  oddsPager: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", backgroundColor: "#fff", borderRadius: 13, padding: 7 },
+  oddsPagerButton: { minWidth: 74, paddingVertical: 9, alignItems: "center" },
+  oddsPagerButtonText: { color: "#111827", fontSize: 11, fontWeight: "900" },
+  oddsPagerText: { color: "#6b7280", fontSize: 10, fontWeight: "800" },
   oddsTable: { backgroundColor: "#fff", borderRadius: 16, paddingHorizontal: 12 },
   oddsRow: { minHeight: 48, flexDirection: "row", alignItems: "center" },
   oddsRank: { width: 25, height: 25, borderRadius: 13, backgroundColor: "#eef2f7", alignItems: "center", justifyContent: "center", marginRight: 9 },

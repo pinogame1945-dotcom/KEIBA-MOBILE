@@ -60,7 +60,7 @@ export default function App() {
       if (route.type === "RACE" && last.type === "RACE" && last.raceKey === route.raceKey) return prev;
       const next = { ...route, id: nextRouteId.current++ } as ScreenRoute;
       const combined = [...prev, next];
-      return combined.length > 12 ? combined.slice(combined.length - 12) : combined;
+      return combined.length > 6 ? combined.slice(combined.length - 6) : combined;
     });
   }, []);
 
