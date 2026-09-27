@@ -27,7 +27,7 @@ export default function App() {
   const bumpCache = useCallback(() => setCacheRevision((value) => value + 1), []);
 
   const runSync = useCallback(() => {
-    void syncLiveCache().then(bumpCache).catch(() => undefined);
+    void syncLiveCache(bumpCache).then(bumpCache).catch(() => undefined);
   }, [bumpCache]);
 
   useEffect(() => {
@@ -68,7 +68,7 @@ export default function App() {
 
   const openRace = useCallback((raceKey: string) => {
     push({ type: "RACE", raceKey });
-    void warmRaceData(raceKey).then(bumpCache).catch(() => undefined);
+    void warmRaceData(raceKey, bumpCache).then(bumpCache).catch(() => undefined);
   }, [push, bumpCache]);
 
   const openHomeRoot = useCallback(() => {
