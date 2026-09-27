@@ -61,12 +61,24 @@ for (const token of [
   'candidate.raceStatus === "CANCELLED"',
   'candidate.raceStatus === "ABANDONED"',
   "candidate.raceNo === race.raceNo",
-  "meetingSwitcherGrid",
-  'flexWrap: "wrap"',
+  "meetingSwitchRows",
+  "meetingSwitchRow",
+  "meetingVenueScroller",
+  "meetingSwitchChip",
   "setMeetingSwitcherOpen(false)",
 ]) {
   assert.ok(race.includes(token), "race meeting switcher contract missing: " + token);
 }
+
+assert.ok(
+  race.includes('meetingSwitchRowDate: { width: 62') &&
+  race.includes('minWidth: 64, minHeight: 34') &&
+  race.includes('horizontal') &&
+  !race.includes("meetingSwitcherGrid") &&
+  !race.includes("meetingSwitchButton:"),
+  "meeting switcher must use compact date rows with horizontally scalable venue chips",
+);
+
 assert.ok(
   !race.includes('style={styles.raceNavCenter} onPress={onOpenWeek}'),
   "center race navigation must open the meeting switcher instead of returning to the week list",
