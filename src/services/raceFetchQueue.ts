@@ -52,17 +52,25 @@ export async function prepareRaceFetchRun(targetFingerprint: string) {
     statsFromDb(),
   ]);
   const sameTarget = target?.value === targetFingerprint;
-  const resume = sameTarget && stats.total > 0 && (
-    state?.value === "RUNNING" || state?.value === "FAILED" || state?.value === "PARTIAL" ||
-    stats.pending > 0 || stats.fetching > 0 || stats.retry > 0
-  );
+  const reusable = sameTarget && stats.total > 0;
 
-  if (resume) {
+  if (reusable) {
     await db.withTransactionAsync(async () => {
-      await db.runAsync(
-        "UPDATE race_fetch_queue SET status='PENDING',attempts=0,last_error=NULL,updated_at=CURRENT_TIMESTAMP " +
-        "WHERE status IN ('FETCHING','RETRY','FAILED')",
-      );
+      const unfinished = stats.pending + stats.fetching + stats.retry + stats.failed;
+      if (state?.value === "COMPLETED" || unfinished === 0) {
+        // Same schedule target: reuse known formal race URLs instead of repeating
+        // the expensive discovery crawl. A completed run becomes a direct refresh.
+        await db.runAsync(
+          "UPDATE race_fetch_queue SET status='PENDING',attempts=0,last_error=NULL,updated_at=CURRENT_TIMESTAMP",
+        );
+      } else {
+        // Partial/interrupted run: preserve already verified DONE pages and retry only
+        // unfinished work.
+        await db.runAsync(
+          "UPDATE race_fetch_queue SET status='PENDING',attempts=0,last_error=NULL,updated_at=CURRENT_TIMESTAMP " +
+          "WHERE status IN ('FETCHING','RETRY','FAILED')",
+        );
+      }
       await db.runAsync(
         "INSERT INTO meta(key,value) VALUES('race_fetch_state','RUNNING') " +
         "ON CONFLICT(key) DO UPDATE SET value='RUNNING'",
