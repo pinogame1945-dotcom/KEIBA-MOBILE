@@ -14,6 +14,10 @@ export function directionLabel(direction: JraRace["direction"]) {
 }
 
 export function raceCourseLabel(race: JraRace) {
+  if (race.discipline === "OBSTACLE") {
+    return ["障害", race.distanceM != null ? race.distanceM.toLocaleString() + "m" : null]
+      .filter(Boolean).join(" ");
+  }
   return [
     surfaceLabel(race.surface),
     race.distanceM != null ? race.distanceM.toLocaleString() + "m" : null,
