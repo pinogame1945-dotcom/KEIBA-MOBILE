@@ -48,4 +48,21 @@ assert.ok(
   "RESULT ARCHIVE v1 must not pre-commit MOBILE L1/L2/L3 storage contracts",
 );
 
+
+assert.ok(
+  repository.includes("assertResultMatchesStoredEntries") &&
+  repository.includes("listIncompleteArchiveRaces") &&
+  repository.includes("JOIN races r ON r.race_key=rr.race_key") &&
+  !repository.includes('"SELECT DISTINCT race_key AS raceKey FROM race_results"'),
+  "phase 2 must guard official results, expose bounded archive backlog reads and avoid full result-history scans",
+);
+
+assert.ok(
+  sync.includes("refreshArchiveBacklog") &&
+  sync.includes("listIncompleteArchiveRaces(64)") &&
+  sync.includes('"archive_result_repair_attempt:"') &&
+  sync.includes('"archive_odds_repair_attempt:"'),
+  "expired-week archive gaps must receive throttled bounded repair without depending on current-week navigation",
+);
+
 console.log("Result archive contract: PASS");
