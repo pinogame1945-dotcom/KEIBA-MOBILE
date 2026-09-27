@@ -1,3 +1,4 @@
+import { groupStoredRaceWeeks, type StoredRaceWeek } from "../domain/raceArchiveWeeks";
 import { assertResultMatchesStoredEntries } from "../domain/resultArchiveGuard";
 import type {
   JraEntry, JraPayout, JraRace, JraRaceCard, JraRaceResult, OddsBetType, OddsRow, RaceNotice, ScheduleMeeting,
@@ -446,6 +447,40 @@ export async function listRacesForDates(dates: string[]) {
     .map((race) => mergeScheduledWithStored(race, byKey.get(race.raceKey)))
     .concat(stored.filter((race) => !scheduledKeys.has(race.raceKey)))
     .sort((a,b) => a.raceDate.localeCompare(b.raceDate) || a.venue.localeCompare(b.venue,"ja") || a.raceNo - b.raceNo);
+}
+
+export async function listStoredRaceWeeks():Promise<StoredRaceWeek[]>{
+  const db=await getLiveDb();
+  const rows=await db.getAllAsync<{
+    raceDate:string;
+    raceCount:number;
+    resultCount:number;
+  }>(
+    `SELECT r.race_date AS raceDate,
+       COUNT(*) AS raceCount,
+       SUM(CASE WHEN EXISTS(
+         SELECT 1 FROM race_results rr WHERE rr.race_key=r.race_key
+       ) THEN 1 ELSE 0 END) AS resultCount
+     FROM races r
+     WHERE r.status='OFFICIAL' OR r.race_status='COMPLETED'
+     GROUP BY r.race_date
+     ORDER BY r.race_date`,
+  );
+  return groupStoredRaceWeeks(rows.map(row=>({
+    raceDate:row.raceDate,
+    raceCount:Number(row.raceCount??0),
+    resultCount:Number(row.resultCount??0),
+  })));
+}
+
+export async function listRaceNavigationGroup(raceDate:string){
+  const target=await getScheduleTarget();
+  if(target?.dates?.includes(raceDate))return listRacingWeekRaces();
+
+  const week=(await listStoredRaceWeeks()).find(item=>item.dates.includes(raceDate));
+  if(week)return listRacesForDates(week.dates);
+
+  return listRacesForDates([raceDate]);
 }
 
 export async function listTodayRaces() {
