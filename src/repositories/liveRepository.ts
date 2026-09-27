@@ -3,6 +3,7 @@ import type {
   ScheduleTarget, VenueConditionSnapshot,
 } from "../domain/live";
 import { canonicalRaceIdFromSchedule } from "../data/jra/raceHeaderParser";
+import { earliestScheduleDate, selectActiveSchedule } from "../data/jra/reschedule";
 import { getLiveDb, withLiveDbTransaction, withLiveDbWrite } from "../storage/liveDb";
 
 export type JraOddsBetType = OddsBetType;
@@ -22,7 +23,7 @@ function scheduleRaceKey(raceDate: string, venue: string, raceNo: number) {
 const SCHEDULE_TARGET_META = "schedule_target_v2";
 
 export async function saveScheduleTarget(target: ScheduleTarget) {
-  await setWeekMeta(SCHEDULE_TARGET_META, JSON.stringify(target));
+  await persistScheduleTarget(target);
 }
 
 export async function getScheduleTarget(): Promise<ScheduleTarget | null> {
@@ -31,6 +32,7 @@ export async function getScheduleTarget(): Promise<ScheduleTarget | null> {
   try {
     const parsed = JSON.parse(raw) as ScheduleTarget;
     if (!Array.isArray(parsed.dates) || !Array.isArray(parsed.meetings)) return null;
+    if (!Array.isArray(parsed.disruptions)) parsed.disruptions = [];
     return parsed;
   } catch {
     return null;
@@ -48,6 +50,11 @@ function scheduleRaceAsDisplay(
       race.raceDate, race.venue, meeting.meetingNo, meeting.meetingDay, race.raceNo,
     ),
     raceDate: race.raceDate,
+    scheduledDate: race.raceDate,
+    actualDate: race.raceDate,
+    raceStatus: "SCHEDULED",
+    scheduleStatus: "ACTIVE",
+    supersededByRaceKey: null,
     venue: race.venue,
     raceNo: race.raceNo,
     raceName: race.raceName,
@@ -100,6 +107,184 @@ async function insertNotice(
   );
 }
 
+
+async function invalidateRaceSession(
+  db: Awaited<ReturnType<typeof getLiveDb>>,
+  raceKey: string,
+  reason: "RESCHEDULED" | "CANCELLED" | "ABANDONED",
+) {
+  await db.runAsync(
+    `UPDATE odds_history
+     SET invalidated_at=COALESCE(invalidated_at,CURRENT_TIMESTAMP),
+         invalidated_reason=COALESCE(invalidated_reason,?)
+     WHERE race_key=? AND invalidated_at IS NULL`,
+    reason,raceKey,
+  );
+  await db.runAsync("DELETE FROM odds_current WHERE race_key=?",raceKey);
+  await db.runAsync("DELETE FROM odds_actions WHERE race_key=?",raceKey);
+  await db.runAsync(
+    "DELETE FROM meta WHERE key IN (?,?,?)",
+    "odds_final_confirmed:"+raceKey,
+    "odds_final_probe:"+raceKey,
+    "payout_repair_attempt:"+raceKey,
+  );
+}
+
+async function insertScheduleNotice(
+  db: Awaited<ReturnType<typeof getLiveDb>>,
+  input: {
+    eventKey: string;
+    raceKey: string;
+    raceDate: string;
+    venue: string;
+    raceNo: number;
+    kind: string;
+    previousValue: string | null;
+    nextValue: string | null;
+    observedAt: string;
+  },
+) {
+  await db.runAsync(
+    `INSERT OR IGNORE INTO notices(
+      event_key,race_key,race_date,venue,race_no,kind,horse_no,horse_name,previous_value,next_value,observed_at
+    ) VALUES(?,?,?,?,?,?,NULL,NULL,?,?,?)`,
+    input.eventKey,input.raceKey,input.raceDate,input.venue,input.raceNo,input.kind,
+    input.previousValue,input.nextValue,input.observedAt,
+  );
+}
+
+async function reconcileScheduleGroup(
+  db: Awaited<ReturnType<typeof getLiveDb>>,
+  canonicalRaceId: string | null,
+  observedAt: string,
+) {
+  if (!canonicalRaceId) return;
+  const rows = await db.getAllAsync<{
+    raceKey:string;raceDate:string;fetchedAt:string;venue:string;raceNo:number;
+  }>(
+    `SELECT race_key AS raceKey,race_date AS raceDate,fetched_at AS fetchedAt,venue,race_no AS raceNo
+     FROM races WHERE canonical_race_id=?`,
+    canonicalRaceId,
+  );
+  if (rows.length <= 0) return;
+  const active = selectActiveSchedule(rows);
+  const scheduledDate = earliestScheduleDate(rows);
+  if (!active || !scheduledDate) return;
+
+  await db.runAsync(
+    `UPDATE races
+     SET scheduled_date=?,actual_date=?,schedule_status='ACTIVE',
+         superseded_by_race_key=NULL,archived_at=NULL
+     WHERE race_key=?`,
+    scheduledDate,active.raceDate,active.raceKey,
+  );
+
+  for (const stale of rows.filter((row) => row.raceKey !== active.raceKey)) {
+    await db.runAsync(
+      `UPDATE races
+       SET scheduled_date=?,actual_date=?,schedule_status='RESCHEDULED',
+           superseded_by_race_key=?,archived_at=COALESCE(archived_at,?)
+       WHERE race_key=?`,
+      scheduledDate,active.raceDate,active.raceKey,observedAt,stale.raceKey,
+    );
+    await invalidateRaceSession(db,stale.raceKey,"RESCHEDULED");
+    await insertScheduleNotice(db,{
+      eventKey:["MEETING_RESCHEDULED",stale.raceDate,stale.venue,active.raceDate].join("|"),
+      raceKey:"JRA-MEETING:"+stale.raceDate+":"+stale.venue,
+      raceDate:stale.raceDate,
+      venue:stale.venue,
+      raceNo:0,
+      kind:"MEETING_RESCHEDULED",
+      previousValue:stale.raceDate,
+      nextValue:active.raceDate,
+      observedAt,
+    });
+  }
+}
+
+async function applyScheduleDisruptions(
+  db: Awaited<ReturnType<typeof getLiveDb>>,
+  target: ScheduleTarget,
+) {
+  for (const disruption of target.disruptions ?? []) {
+    const rows = disruption.scope === "MEETING"
+      ? await db.getAllAsync<{raceKey:string;raceStatus:string}>(
+          "SELECT race_key AS raceKey,race_status AS raceStatus FROM races WHERE race_date=? AND venue=? AND schedule_status='ACTIVE'",
+          disruption.raceDate,disruption.venue,
+        )
+      : await db.getAllAsync<{raceKey:string;raceStatus:string}>(
+          "SELECT race_key AS raceKey,race_status AS raceStatus FROM races WHERE race_date=? AND venue=? AND race_no=? AND schedule_status='ACTIVE'",
+          disruption.raceDate,disruption.venue,disruption.raceNo,
+        );
+    for (const row of rows) {
+      if (row.raceStatus === "COMPLETED") continue;
+      await db.runAsync(
+        "UPDATE races SET race_status=? WHERE race_key=?",
+        disruption.kind,row.raceKey,
+      );
+      await invalidateRaceSession(db,row.raceKey,disruption.kind);
+    }
+    const raceNo = disruption.scope === "RACE" ? disruption.raceNo ?? 0 : 0;
+    await insertScheduleNotice(db,{
+      eventKey:[
+        disruption.scope === "MEETING" ? "MEETING_CANCELLED" : "RACE_CANCELLED",
+        disruption.raceDate,disruption.venue,raceNo,disruption.kind,
+      ].join("|"),
+      raceKey:disruption.scope === "MEETING"
+        ? "JRA-MEETING:"+disruption.raceDate+":"+disruption.venue
+        : scheduleRaceKey(disruption.raceDate,disruption.venue,raceNo),
+      raceDate:disruption.raceDate,
+      venue:disruption.venue,
+      raceNo,
+      kind:disruption.scope === "MEETING" ? "MEETING_CANCELLED" : "RACE_CANCELLED",
+      previousValue:"SCHEDULED",
+      nextValue:disruption.kind,
+      observedAt:target.fetchedAt,
+    });
+  }
+}
+
+async function persistScheduleTarget(target: ScheduleTarget) {
+  await withLiveDbTransaction(async (db) => {
+    await db.runAsync(
+      "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+      SCHEDULE_TARGET_META,JSON.stringify(target),
+    );
+
+    const canonicalIds = new Set<string>();
+    for (const meeting of target.meetings) {
+      for (const race of meeting.races) {
+        const row = scheduleRaceAsDisplay(meeting,race,target.fetchedAt);
+        if (row.canonicalRaceId) canonicalIds.add(row.canonicalRaceId);
+        await db.runAsync(
+          `INSERT INTO races(
+            race_key,canonical_race_id,race_date,scheduled_date,actual_date,race_status,schedule_status,
+            superseded_by_race_key,archived_at,venue,race_no,race_name,race_class,start_time,
+            discipline,surface,distance_m,direction,weather,track_condition,source_url,fetched_at,status
+          ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          ON CONFLICT(race_key) DO UPDATE SET
+            canonical_race_id=COALESCE(excluded.canonical_race_id,races.canonical_race_id),
+            scheduled_date=COALESCE(races.scheduled_date,excluded.scheduled_date),
+            actual_date=CASE WHEN races.race_status='COMPLETED' THEN races.actual_date ELSE excluded.actual_date END,
+            race_name=COALESCE(races.race_name,excluded.race_name),
+            start_time=COALESCE(excluded.start_time,races.start_time),
+            discipline=excluded.discipline,surface=COALESCE(excluded.surface,races.surface),
+            distance_m=COALESCE(excluded.distance_m,races.distance_m),
+            source_url=excluded.source_url,fetched_at=excluded.fetched_at`,
+          row.raceKey,row.canonicalRaceId,row.raceDate,row.scheduledDate,row.actualDate,row.raceStatus,row.scheduleStatus,
+          row.supersededByRaceKey,null,row.venue,row.raceNo,row.raceName,row.raceClass,row.startTime,
+          row.discipline,row.surface,row.distanceM,row.direction,row.weather,row.trackCondition,row.sourceUrl,row.fetchedAt,row.status,
+        );
+      }
+    }
+
+    for (const canonicalRaceId of canonicalIds) {
+      await reconcileScheduleGroup(db,canonicalRaceId,target.fetchedAt);
+    }
+    await applyScheduleDisruptions(db,target);
+  });
+}
+
 async function recordChanges(db: Awaited<ReturnType<typeof getLiveDb>>, card: JraRaceCard) {
   const previous = await db.getFirstAsync<{
     start_time: string | null; weather: string | null; track_condition: string | null; status: string;
@@ -148,9 +333,10 @@ async function writeOfficialCard(db: Awaited<ReturnType<typeof getLiveDb>>, card
   const cardTrackCondition = hasFinalResult ? null : r.trackCondition;
   await db.runAsync(
     `INSERT INTO races(
-      race_key,canonical_race_id,race_date,venue,race_no,race_name,race_class,start_time,
+      race_key,canonical_race_id,race_date,scheduled_date,actual_date,race_status,schedule_status,
+      superseded_by_race_key,archived_at,venue,race_no,race_name,race_class,start_time,
       discipline,surface,distance_m,direction,weather,track_condition,source_url,fetched_at,status
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'OFFICIAL')
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'OFFICIAL')
     ON CONFLICT(race_key) DO UPDATE SET
       canonical_race_id=COALESCE(excluded.canonical_race_id,races.canonical_race_id),
       race_name=excluded.race_name,race_class=excluded.race_class,start_time=excluded.start_time,
@@ -159,8 +345,9 @@ async function writeOfficialCard(db: Awaited<ReturnType<typeof getLiveDb>>, card
       weather=COALESCE(excluded.weather,races.weather),
       track_condition=COALESCE(excluded.track_condition,races.track_condition),
       source_url=excluded.source_url,fetched_at=excluded.fetched_at,status='OFFICIAL'`,
-    r.raceKey, r.canonicalRaceId, r.raceDate, r.venue, r.raceNo, r.raceName, r.raceClass, r.startTime,
-    r.discipline, r.surface, r.distanceM, r.direction, cardWeather, cardTrackCondition, r.sourceUrl, r.fetchedAt,
+    r.raceKey,r.canonicalRaceId,r.raceDate,r.scheduledDate,r.actualDate,r.raceStatus,r.scheduleStatus,
+    r.supersededByRaceKey,null,r.venue,r.raceNo,r.raceName,r.raceClass,r.startTime,
+    r.discipline,r.surface,r.distanceM,r.direction,cardWeather,cardTrackCondition,r.sourceUrl,r.fetchedAt,
   );
   await db.runAsync("DELETE FROM entries WHERE race_key=?", r.raceKey);
   for (const e of card.entries) {
@@ -184,7 +371,7 @@ export async function saveOfficialMeeting(cards: JraRaceCard[], authoritativeRac
   if (expected.join(",") !== actual.join(",")) throw new Error("正式ナビ集合と保存対象レース集合が一致しない");
   await withLiveDbTransaction(async (db) => {
     const existing = await db.getAllAsync<{ race_no: number }>(
-      "SELECT race_no FROM races WHERE race_date=? AND venue=? AND status='OFFICIAL' ORDER BY race_no",
+      "SELECT race_no FROM races WHERE race_date=? AND venue=? AND status='OFFICIAL' AND schedule_status='ACTIVE' AND race_status NOT IN ('CANCELLED','ABANDONED') ORDER BY race_no",
       first.raceDate, first.venue,
     );
     const omitted = existing.map((r) => r.race_no).filter((no) => !expected.includes(no));
@@ -198,8 +385,10 @@ export async function saveOfficialCard(card: JraRaceCard) {
 }
 
 function raceSelect() {
-  return `race_key AS raceKey,canonical_race_id AS canonicalRaceId,race_date AS raceDate,venue,race_no AS raceNo,
-    race_name AS raceName,race_class AS raceClass,start_time AS startTime,discipline,surface,distance_m AS distanceM,
+  return `race_key AS raceKey,canonical_race_id AS canonicalRaceId,race_date AS raceDate,
+    COALESCE(scheduled_date,race_date) AS scheduledDate,actual_date AS actualDate,
+    race_status AS raceStatus,schedule_status AS scheduleStatus,superseded_by_race_key AS supersededByRaceKey,
+    venue,race_no AS raceNo,race_name AS raceName,race_class AS raceClass,start_time AS startTime,discipline,surface,distance_m AS distanceM,
     direction,weather,track_condition AS trackCondition,source_url AS sourceUrl,fetched_at AS fetchedAt,status`;
 }
 
@@ -215,7 +404,12 @@ async function listStoredRacesForDates(dates: string[]) {
 }
 
 export async function listOfficialRacesForDates(dates: string[]) {
-  return (await listStoredRacesForDates(dates)).filter((race) => race.status === "OFFICIAL");
+  return (await listStoredRacesForDates(dates)).filter((race) =>
+    race.status === "OFFICIAL" &&
+    race.scheduleStatus === "ACTIVE" &&
+    race.raceStatus !== "CANCELLED" &&
+    race.raceStatus !== "ABANDONED"
+  );
 }
 
 function mergeScheduledWithStored(schedule: JraRace, stored: JraRace | undefined) {
@@ -224,6 +418,11 @@ function mergeScheduledWithStored(schedule: JraRace, stored: JraRace | undefined
   return {
     ...schedule,
     canonicalRaceId: stored.canonicalRaceId ?? schedule.canonicalRaceId,
+    scheduledDate: stored.scheduledDate ?? schedule.scheduledDate,
+    actualDate: stored.actualDate ?? schedule.actualDate,
+    raceStatus: stored.raceStatus ?? schedule.raceStatus,
+    scheduleStatus: stored.scheduleStatus ?? schedule.scheduleStatus,
+    supersededByRaceKey: stored.supersededByRaceKey ?? schedule.supersededByRaceKey,
     raceName: stored.raceName ?? schedule.raceName,
     raceClass: stored.raceClass ?? schedule.raceClass,
     weather: stored.weather ?? schedule.weather,
@@ -269,7 +468,23 @@ export function racingWeekCandidateDates(nowMs = Date.now()) {
 
 export async function listRacingWeekRaces(nowMs = Date.now()) {
   const target = await getScheduleTarget();
-  return listRacesForDates(target?.dates?.length ? target.dates : racingWeekCandidateDates(nowMs));
+  const dates = target?.dates?.length ? target.dates : racingWeekCandidateDates(nowMs);
+  const base = await listRacesForDates(dates);
+  const canonicalIds = [...new Set(base.map((race) => race.canonicalRaceId).filter((id): id is string => Boolean(id)))];
+  if (!canonicalIds.length) return base;
+  const db = await getLiveDb();
+  const placeholders = canonicalIds.map(() => "?").join(",");
+  const stale = await db.getAllAsync<JraRace>(
+    `SELECT ${raceSelect()} FROM races
+     WHERE canonical_race_id IN (${placeholders}) AND schedule_status='RESCHEDULED'
+     ORDER BY race_date,venue,race_no`,
+    ...canonicalIds,
+  );
+  const byKey = new Map(base.map((race) => [race.raceKey,race]));
+  for (const race of stale) if (!byKey.has(race.raceKey)) byKey.set(race.raceKey,race);
+  return [...byKey.values()].sort(
+    (a,b) => a.raceDate.localeCompare(b.raceDate) || a.venue.localeCompare(b.venue,"ja") || a.raceNo-b.raceNo,
+  );
 }
 
 export async function getRace(raceKey: string) {
@@ -620,15 +835,20 @@ export async function saveOfficialRaceResult(
     }
     await db.runAsync(
       `INSERT INTO races(
-        race_key,canonical_race_id,race_date,venue,race_no,race_name,race_class,start_time,
+        race_key,canonical_race_id,race_date,scheduled_date,actual_date,race_status,schedule_status,
+        superseded_by_race_key,archived_at,venue,race_no,race_name,race_class,start_time,
         discipline,surface,distance_m,direction,weather,track_condition,source_url,fetched_at,status
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(race_key) DO UPDATE SET
         canonical_race_id=COALESCE(excluded.canonical_race_id,races.canonical_race_id),
+        scheduled_date=COALESCE(races.scheduled_date,excluded.scheduled_date),
+        actual_date=excluded.actual_date,race_status='COMPLETED',
         race_name=COALESCE(races.race_name,excluded.race_name),
         weather=COALESCE(races.weather,excluded.weather),
         track_condition=COALESCE(races.track_condition,excluded.track_condition)`,
-      race.raceKey,race.canonicalRaceId,race.raceDate,race.venue,race.raceNo,race.raceName,race.raceClass,race.startTime,
+      race.raceKey,race.canonicalRaceId,race.raceDate,race.scheduledDate,race.actualDate ?? race.raceDate,
+      "COMPLETED",race.scheduleStatus,race.supersededByRaceKey,null,
+      race.venue,race.raceNo,race.raceName,race.raceClass,race.startTime,
       race.discipline,race.surface,race.distanceM,race.direction,race.weather,race.trackCondition,race.sourceUrl,race.fetchedAt,race.status,
     );
     await db.runAsync("DELETE FROM race_results WHERE race_key=?", race.raceKey);
