@@ -71,7 +71,7 @@ export function parseCalendarDisruptions(html: string, sourceUrl: string): Sched
     }
 
     const racePattern = new RegExp(
-      venue + "(?:競馬)?[^。]{0,120}?(?:第)?(\\d{1,2})(?:競走|レース|R)[^。]{0,80}?(?:競走を取りやめ|競走取りやめ|レースを取りやめ|レース取りやめ|競走中止|レース中止)",
+      venue + "(?:競馬)?[^。]{0,120}?(?:第)?(\\d{1,2})(?:競走|レース|R)[^。]{0,80}?(?:(?:競走|レース)(?:の|を)?取りやめ|(?:競走|レース)(?:の|を)?中止|(?:の|を)取りやめ)",
       "g",
     );
     for (const match of text.matchAll(racePattern)) {
