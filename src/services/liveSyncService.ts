@@ -1,146 +1,151 @@
 import { raceStartEpoch } from "../data/jra/oddsAvailability";
 import {
-  getOddsAvailability,getRace,getRaceResults,getWeekEntries,getWeekMeta,
-  listRaceKeysWithResults,listRacingWeekRaces,localTodayIso,racingWeekCandidateDates,setWeekMeta,
+  getOddsAvailability,getRace,getRaceResultCompleteness,getWeekEntries,getWeekMeta,
+  listRacingWeekRaces,localTodayIso,setWeekMeta,
 } from "../repositories/liveRepository";
 import { refreshLatestOdds } from "./oddsService";
-import { refreshCurrentWeekRaceData,refreshDueRaceStates,refreshRaceState } from "./raceRefreshService";
+import { refreshCurrentWeekRaceData,refreshKnownRaceStates,refreshRaceState } from "./raceRefreshService";
 import { refreshOfficialRaceResult } from "./resultService";
+import { refreshScheduleTarget } from "./scheduleTargetService";
 import { refreshTodayVenueConditions } from "./venueConditionService";
 
-const WEEK_ATTEMPT_META = "live_sync_week_attempt_at";
-let syncPromise: Promise<void> | null = null;
-const warmPromises = new Map<string, Promise<void>>();
+const SCHEDULE_ATTEMPT="live_schedule_attempt_at";
+const FULL_ATTEMPT="live_full_attempt_at";
+const FULL_SUCCESS="live_full_success_at";
+let syncPromise:Promise<void>|null=null;
+const warmPromises=new Map<string,Promise<void>>();
 
-function parsedTime(value: string | null) {
-  if (!value) return 0;
-  const ms = Date.parse(value);
-  return Number.isFinite(ms) ? ms : 0;
+function parsedTime(value:string|null){
+  const ms=value?Date.parse(value):NaN;
+  return Number.isFinite(ms)?ms:0;
 }
-
-function oddsRefreshInterval(remainingMs: number) {
-  if (remainingMs <= 20 * 60 * 1000) return 2 * 60 * 1000;
-  if (remainingMs <= 60 * 60 * 1000) return 5 * 60 * 1000;
-  return 15 * 60 * 1000;
+function oddsRefreshInterval(remaining:number){
+  if(remaining<=20*60*1000)return 2*60*1000;
+  if(remaining<=60*60*1000)return 5*60*1000;
+  return 15*60*1000;
 }
-
-async function latestOddsAt(raceKey: string) {
-  const availability = await getOddsAvailability(raceKey);
-  return availability.reduce((latest, row) => Math.max(latest, parsedTime(row.observedAt)), 0);
+async function latestOddsAt(raceKey:string){
+  const rows=await getOddsAvailability(raceKey);
+  return rows.reduce((latest,row)=>Math.max(latest,parsedTime(row.observedAt)),0);
 }
-
-async function refreshWeekIfDue() {
-  const races = await listRacingWeekRaces();
-  const now = Date.now();
-  const scheduled = races.some((race) => race.status === "SCHEDULED");
-  const lastAttempt = parsedTime(await getWeekMeta(WEEK_ATTEMPT_META));
-  const interval = !races.length
-    ? 5 * 60 * 1000
-    : scheduled
-      ? 15 * 60 * 1000
-      : 30 * 60 * 1000;
-  if (lastAttempt && now - lastAttempt < interval) return;
-
-  await setWeekMeta(WEEK_ATTEMPT_META, new Date(now).toISOString());
-  try {
-    await refreshCurrentWeekRaceData();
-  } catch {
-    // Cache-first: a temporary JRA failure must never block the UI.
+async function refreshScheduleIfDue(onMutation?:()=>void){
+  const now=Date.now();
+  const last=parsedTime(await getWeekMeta(SCHEDULE_ATTEMPT));
+  if(last&&now-last<30*60*1000)return;
+  await setWeekMeta(SCHEDULE_ATTEMPT,new Date(now).toISOString());
+  await refreshScheduleTarget(false);
+  onMutation?.();
+}
+async function refreshCardLayer(onMutation?:()=>void){
+  const now=Date.now();
+  const [state,lastFull,lastAttempt]=await Promise.all([
+    getWeekMeta("race_fetch_state"),getWeekMeta(FULL_SUCCESS),getWeekMeta(FULL_ATTEMPT),
+  ]);
+  const incomplete=state==="RUNNING"||state==="FAILED"||state==="PARTIAL";
+  const fullDue=incomplete
+    ?!parsedTime(lastAttempt)||now-parsedTime(lastAttempt)>=15*60*1000
+    :!parsedTime(lastFull)||now-parsedTime(lastFull)>=6*60*60*1000;
+  if(fullDue){
+    await setWeekMeta(FULL_ATTEMPT,new Date(now).toISOString());
+    const result=await refreshCurrentWeekRaceData(undefined,onMutation);
+    if(result.pendingMeetings===0){
+      await setWeekMeta(FULL_SUCCESS,new Date().toISOString());
+    }
+  }else{
+    await refreshKnownRaceStates(onMutation);
   }
 }
-
-async function refreshOnePendingResult() {
-  const races = await listRacingWeekRaces();
-  const dates = racingWeekCandidateDates();
-  const resultKeys = new Set(await listRaceKeysWithResults(dates));
-  const now = Date.now();
-
-  const candidates = races
-    .filter((race) => race.raceDate === localTodayIso() && race.status === "OFFICIAL" && !resultKeys.has(race.raceKey))
-    .filter((race) => {
-      const start = raceStartEpoch(race);
-      return start != null && start + 3 * 60 * 1000 <= now;
+async function refreshOneIncompleteResult(onMutation?:()=>void){
+  const races=await listRacingWeekRaces();
+  const now=Date.now();
+  const candidates=races
+    .filter(race=>race.canonicalRaceId)
+    .filter(race=>{
+      const start=raceStartEpoch(race);
+      return start!=null&&start+15*60*1000<=now;
     })
-    .sort((a,b) => (raceStartEpoch(b) ?? 0) - (raceStartEpoch(a) ?? 0));
-
-  for (const candidate of candidates.slice(0, 4)) {
-    try {
-      await refreshOfficialRaceResult(candidate);
+    .sort((a,b)=>(raceStartEpoch(b)??0)-(raceStartEpoch(a)??0));
+  for(const race of candidates.slice(0,12)){
+    const completeness=await getRaceResultCompleteness(race.raceKey);
+    if(completeness.complete)continue;
+    try{
+      await refreshOfficialRaceResult(race);
+      onMutation?.();
       break;
-    } catch {}
+    }catch{}
   }
 }
-
-async function refreshOneUpcomingOdds() {
-  const races = await listRacingWeekRaces();
-  const now = Date.now();
-  const today = localTodayIso();
-  const candidates = races
-    .filter((race) => race.raceDate === today && race.status === "OFFICIAL")
-    .map((race) => ({ race, start: raceStartEpoch(race) }))
-    .filter((item): item is { race: typeof races[number]; start: number } =>
-      item.start != null && item.start > now && item.start - now <= 3 * 60 * 60 * 1000
+async function refreshOneUpcomingOdds(){
+  const races=await listRacingWeekRaces();
+  const now=Date.now(),today=localTodayIso();
+  const candidates=races
+    .filter(race=>race.raceDate===today&&race.status==="OFFICIAL")
+    .map(race=>({race,start:raceStartEpoch(race)}))
+    .filter((item):item is {race:typeof races[number];start:number}=>
+      item.start!=null&&item.start>now&&item.start-now<=3*60*60*1000
     )
-    .sort((a,b) => a.start - b.start);
-
-  for (const { race, start } of candidates) {
-    const last = await latestOddsAt(race.raceKey);
-    if (last && now - last < oddsRefreshInterval(start - now)) continue;
-    try {
-      const entries = await getWeekEntries(race.raceKey);
-      if (entries.length) await refreshLatestOdds(race, entries);
-    } catch {}
+    .sort((a,b)=>a.start-b.start);
+  for(const {race,start} of candidates){
+    const last=await latestOddsAt(race.raceKey);
+    if(last&&now-last<oddsRefreshInterval(start-now))continue;
+    try{
+      const entries=await getWeekEntries(race.raceKey);
+      if(entries.length)await refreshLatestOdds(race,entries);
+    }catch{}
     break;
   }
 }
 
-export function syncLiveCache() {
-  if (syncPromise) return syncPromise;
-  syncPromise = (async () => {
-    await refreshWeekIfDue();
-    await refreshDueRaceStates().catch(() => undefined);
-    await refreshTodayVenueConditions().catch(() => undefined);
-    // Keep network work bounded: at most one successful result and one odds refresh per sweep.
-    await refreshOnePendingResult();
+export function syncLiveCache(onMutation?:()=>void){
+  if(syncPromise)return syncPromise;
+  syncPromise=(async()=>{
+    await refreshScheduleIfDue(onMutation).catch(()=>undefined);
+    await refreshTodayVenueConditions().then(()=>onMutation?.()).catch(()=>undefined);
+    await refreshCardLayer(onMutation).catch(()=>undefined);
+    await refreshOneIncompleteResult(onMutation);
     await refreshOneUpcomingOdds();
-  })().finally(() => { syncPromise = null; });
+  })().finally(()=>{syncPromise=null;});
   return syncPromise;
 }
 
-export function warmRaceData(raceKey: string) {
-  const existing = warmPromises.get(raceKey);
-  if (existing) return existing;
-  const job = (async () => {
-    let race = await getRace(raceKey);
-    if (!race) return;
+export function warmRaceData(raceKey:string,onMutation?:()=>void){
+  const existing=warmPromises.get(raceKey);
+  if(existing)return existing;
+  const job=(async()=>{
+    let race=await getRace(raceKey);
+    if(!race)return;
+    const start=raceStartEpoch(race);
+    const now=Date.now();
 
-    if (race.status !== "OFFICIAL") {
-      await refreshCurrentWeekRaceData().catch(() => undefined);
-      race = await getRace(raceKey);
-      if (!race || race.status !== "OFFICIAL") return;
-    }
-
-    const start = raceStartEpoch(race);
-    const now = Date.now();
-    if (start != null && start <= now) {
-      const results = await getRaceResults(raceKey);
-      if (!results.length) await refreshOfficialRaceResult(race).catch(() => undefined);
+    if(start!=null&&start+15*60*1000<=now){
+      const completeness=await getRaceResultCompleteness(raceKey);
+      if(!completeness.complete){
+        await refreshOfficialRaceResult(race).then(()=>onMutation?.()).catch(()=>undefined);
+      }
       return;
     }
 
-    const fetchedAt = parsedTime(race.fetchedAt);
-    if (!fetchedAt || now - fetchedAt > 5 * 60 * 1000) {
-      await refreshRaceState(race).catch(() => undefined);
-      race = await getRace(raceKey) ?? race;
+    if(race.status!=="OFFICIAL"){
+      await refreshRaceState(race).then(()=>onMutation?.()).catch(()=>undefined);
+      race=await getRace(raceKey)??race;
+      if(race.status!=="OFFICIAL")return;
+    }else{
+      const fetched=parsedTime(race.fetchedAt);
+      if(!fetched||now-fetched>5*60*1000){
+        await refreshRaceState(race).then(()=>onMutation?.()).catch(()=>undefined);
+        race=await getRace(raceKey)??race;
+      }
     }
 
-    const lastOdds = await latestOddsAt(raceKey);
-    const remaining = start == null ? 3 * 60 * 60 * 1000 : Math.max(0, start - now);
-    if (!lastOdds || now - lastOdds > oddsRefreshInterval(remaining)) {
-      const entries = await getWeekEntries(raceKey);
-      if (entries.length) await refreshLatestOdds(race, entries).catch(() => undefined);
+    const lastOdds=await latestOddsAt(raceKey);
+    const remaining=start==null?3*60*60*1000:Math.max(0,start-now);
+    if(!lastOdds||now-lastOdds>oddsRefreshInterval(remaining)){
+      const entries=await getWeekEntries(raceKey);
+      if(entries.length){
+        await refreshLatestOdds(race,entries).then(()=>onMutation?.()).catch(()=>undefined);
+      }
     }
-  })().finally(() => warmPromises.delete(raceKey));
-  warmPromises.set(raceKey, job);
+  })().finally(()=>warmPromises.delete(raceKey));
+  warmPromises.set(raceKey,job);
   return job;
 }
