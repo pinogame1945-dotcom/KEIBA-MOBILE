@@ -117,9 +117,9 @@ function assertIdentity(pageText: string, race: JraRace) {
 
 function parseConditions(pageText: string): OfficialRaceConditions {
   return {
-    weather: pageText.match(/天候\s*(晴|曇|雨|小雨|雪|小雪)/)?.[1] ?? null,
-    turfCondition: pageText.match(/芝\s*(良|稍重|重|不良)/)?.[1] ?? null,
-    dirtCondition: pageText.match(/ダート\s*(良|稍重|重|不良)/)?.[1] ?? null,
+    weather: pageText.match(/天候\s*[:：]?\s*(晴|曇|雨|小雨|雪|小雪)/)?.[1] ?? null,
+    turfCondition: pageText.match(/芝\s*[:：]?\s*(良|稍重|重|不良)/)?.[1] ?? null,
+    dirtCondition: pageText.match(/ダート\s*[:：]?\s*(良|稍重|重|不良)/)?.[1] ?? null,
   };
 }
 
