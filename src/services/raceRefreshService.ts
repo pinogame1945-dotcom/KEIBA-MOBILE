@@ -118,6 +118,7 @@ async function drainQueue(
   const cards:CandidateMeetings=new Map();
   const navigation:NavigationEvidence=new Map();
   let processed=0;
+  let savedCards=0;
   while(processed<MAX_CARD_PAGES){
     const item=await claimNextRaceFetchItem();
     if(!item)break;
@@ -160,6 +161,7 @@ async function drainQueue(
           // A verified card is safe to expose immediately. The schedule target keeps
           // the rest of the meeting visible while the full meeting is still collecting.
           await saveOfficialCard(card);
+          savedCards+=1;
           await onMutation?.();
           await markRaceFetchDone(item.url);
         }catch(error){
@@ -172,7 +174,7 @@ async function drainQueue(
       await markRaceFetchFailed(item.url,item.attempts,error);
     }
   }
-  return {cards,navigation};
+  return {cards,navigation,savedCards};
 }
 
 let fullRefresh:Promise<{meetings:number;officialSaved:number;pendingMeetings:number}>|null=null;
@@ -204,14 +206,22 @@ export function refreshCurrentWeekRaceData(
       }
 
       const discovery=await drainQueue(target,onProgress,onMutation);
-      let officialSaved=0;
+      let officialSaved=discovery.savedCards;
       let pendingMeetings=0;
 
       for(const meeting of target.meetings){
         const key=meetingKey(meeting.venue,meeting.meetingNo,meeting.meetingDay);
         const expected=authoritativeRaceNos(meeting,discovery.navigation);
+        const persisted=(await listOfficialRacesForDates([meeting.raceDate]))
+          .filter(race=>race.venue===meeting.venue)
+          .map(race=>race.raceNo)
+          .sort((a,b)=>a-b);
+
         if(!expected?.length){
-          pendingMeetings+=1;
+          // If every official schedule race has independently passed the card guard,
+          // the meeting is usable even when this run did not recover navigation evidence.
+          const scheduled=meeting.races.map(race=>race.raceNo).sort((a,b)=>a-b);
+          if(signature(persisted)!==signature(scheduled))pendingMeetings+=1;
           continue;
         }
 
@@ -222,7 +232,6 @@ export function refreshCurrentWeekRaceData(
         if(cards.length===expected.length){
           try{
             await saveOfficialMeeting(cards,expected);
-            officialSaved+=cards.length;
             await onMutation?.();
             continue;
           }catch(error){
@@ -230,10 +239,6 @@ export function refreshCurrentWeekRaceData(
           }
         }
 
-        const persisted=(await listOfficialRacesForDates([meeting.raceDate]))
-          .filter(race=>race.venue===meeting.venue)
-          .map(race=>race.raceNo)
-          .sort((a,b)=>a-b);
         if(signature(persisted)!==signature(expected)){
           pendingMeetings+=1;
         }
