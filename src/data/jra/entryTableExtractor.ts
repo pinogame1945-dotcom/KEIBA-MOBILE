@@ -1,9 +1,11 @@
 import { load } from "cheerio";
 
+type LinkInfo = { text: string; href: string; };
+
 type GridCell = {
   text: string;
   imageText: string[];
-  linkTexts: string[];
+  links: LinkInfo[];
   isHeader: boolean;
 };
 
@@ -57,15 +59,16 @@ function cellInfo($: ReturnType<typeof load>, node: any): GridCell {
     if (alt) imageText.push(alt);
     if (title) imageText.push(title);
   });
-  const linkTexts: string[] = [];
+  const links: LinkInfo[] = [];
   cell.find("a").each((_, a) => {
     const text = clean($(a).text());
-    if (text) linkTexts.push(text);
+    const href = clean($(a).attr("href"));
+    if (text) links.push({ text, href });
   });
   return {
     text: clean(cell.text()),
     imageText,
-    linkTexts,
+    links,
     isHeader: String((node as { tagName?: string }).tagName ?? "").toLowerCase() === "th",
   };
 }
@@ -112,8 +115,9 @@ function headerIndex(grid: GridCell[][], token: string) {
 }
 function horseName(cell: GridCell | undefined) {
   if(!cell)return "";
-  const linked=cell.linkTexts.find(text=>text&&!/^(?:オッズ|騎手|調教師|厩舎|父|母)$/.test(text));
-  const source=linked||cell.text;
+  const horseLink = cell.links.find(link => /\/horse\//i.test(link.href));
+  const fallbackLink = cell.links.find(link => link.text && !/^(?:オッズ|騎手|調教師|厩舎|父|母)$/.test(link.text));
+  const source=horseLink?.text||fallbackLink?.text||cell.text;
   return clean(source)
     .replace(/(?:除外|取消)$/,"")
     .replace(/\d+(?:\.\d+)?\s*\(\d+番人気\).*$/,"")
@@ -176,6 +180,15 @@ export function extractOfficialEntryRows(html:string):ExtractedOfficialEntryRow[
     const no=boundedInt(horseNoCell?.text,1,18);
     const jockeyCell=jockeyIdx>=0?row[jockeyIdx]:undefined;
     const trainerCell=trainerIdx>=0?row[trainerIdx]:undefined;
+    const rowLinks=[...new Set(row.filter(Boolean).flatMap(cell=>cell.links))];
+    const jockeyLink =
+      jockeyCell?.links.filter(link=>/jockey|datafile\/leading|kishu/i.test(link.href)).at(-1) ??
+      rowLinks.filter(link=>/jockey|datafile\/leading|kishu/i.test(link.href)).at(-1) ??
+      jockeyCell?.links.at(-1);
+    const trainerLink =
+      trainerCell?.links.find(link=>/trainer|chokyo|chokyosi/i.test(link.href)) ??
+      rowLinks.find(link=>/trainer|chokyo|chokyosi/i.test(link.href)) ??
+      trainerCell?.links[0];
     rows.push({
       gate,horseNo:no,horseName:name,
       rowText:clean([...new Set(row.filter(Boolean).map(cell=>cell.text).filter(Boolean))].join(" ")),
@@ -183,8 +196,8 @@ export function extractOfficialEntryRows(html:string):ExtractedOfficialEntryRow[
       sexCellText:sexIdx>=0?row[sexIdx]?.text??"":"",
       jockeyCellText:jockeyCell?.text??"",
       trainerCellText:trainerCell?.text??"",
-      jockeyLinkText:jockeyCell?.linkTexts.at(-1)??null,
-      trainerLinkText:trainerCell?.linkTexts[0]??null,
+      jockeyLinkText:jockeyLink?.text??null,
+      trainerLinkText:trainerLink?.text??null,
       explicitGate:gate!=null,
       explicitHorseNo:no!=null,
     });
