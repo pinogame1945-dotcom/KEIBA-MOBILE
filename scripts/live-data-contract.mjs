@@ -13,6 +13,8 @@ const schedule = readFileSync(new URL("../src/services/scheduleTargetService.ts"
 const storage = readFileSync(new URL("../src/storage/liveDb.ts", import.meta.url), "utf8");
 const odds = readFileSync(new URL("../src/services/oddsService.ts", import.meta.url), "utf8");
 const oddsCollector = readFileSync(new URL("../src/data/jra/oddsCollector.ts", import.meta.url), "utf8");
+const entryExtractor = readFileSync(new URL("../src/data/jra/entryTableExtractor.ts", import.meta.url), "utf8");
+const officialCardGuard = readFileSync(new URL("../src/data/jra/officialCardGuard.ts", import.meta.url), "utf8");
 
 for (const token of ["PENDING","FETCHING","RETRY","DONE","FAILED","attempts<3","race_fetch_target","COMPLETED"]) {
   assert.ok(queue.includes(token), "persistent JRA fetch queue contract missing: " + token);
@@ -66,6 +68,12 @@ assert.ok(
   "payout repair must not consume result-collection slots",
 );
 assert.ok(
+  sync.includes("completeness.conditionsComplete") &&
+  sync.includes('"condition_repair_attempt:"') &&
+  sync.includes("repairedConditions>=2"),
+  "stored results with missing weather/track conditions must receive throttled background repair",
+);
+assert.ok(
   storage.includes("withLiveDbWrite") &&
   storage.includes("withLiveDbTransaction") &&
   repository.includes("withLiveDbTransaction") &&
@@ -76,7 +84,7 @@ assert.ok(
 );
 assert.ok(
   !sync.includes("candidates.slice(0,16)") &&
-  sync.includes("if(refreshed>=4)break"),
+  sync.includes("if(refreshed>=4)continue"),
   "result repair must scan all overdue races while limiting actual successful repairs",
 );
 assert.ok(
@@ -106,6 +114,21 @@ assert.ok(
 assert.ok(
   !result.includes("正式出馬表取得後に結果を確認できる"),
   "final results must remain repairable even when the formal card layer is incomplete",
+);
+
+
+assert.ok(
+  entryExtractor.includes("recoverInactiveNumbering") &&
+  entryExtractor.includes('/(?:取消|除外)/') &&
+  officialCardGuard.includes('/(?:取消|除外)/') &&
+  officialCardGuard.includes("row.horseNo!=null&&row.gate!=null"),
+  "cancelled/excluded runners may recover uniquely missing numbering without weakening active-runner guard",
+);
+assert.ok(
+  odds.includes('probe.isFinal ? "FINAL" : undefined') &&
+  odds.includes("const result = await refreshAllRaceOdds(") &&
+  !odds.includes("if (!probe.isFinal) {"),
+  "published results must still trigger odds recovery even when the JRA final marker is not detected",
 );
 
 console.log("LIVE data contract: PASS");

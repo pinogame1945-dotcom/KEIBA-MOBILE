@@ -99,24 +99,18 @@ export async function refreshLatestOdds(race: JraRace, entries: JraEntry[]) {
     const probe = await probeJraFinalOdds(race);
     const probeAt = new Date().toISOString();
     await markFinalOddsProbe(race.raceKey, probeAt);
-    if (!probe.isFinal) {
-      const latest = await loadOddsMeta(race.raceKey);
-      const missing = required.filter((type) => !latest.availableTypes.includes(type));
-      return {
-        betTypes: latest.availableTypes,
-        rowCount: 0,
-        visitedPages: probe.checkedPages,
-        missingBetTypes: missing,
-        ...latest,
-        missing,
-        finalConfirmed: false,
-      };
-    }
 
-    const result = await refreshAllRaceOdds(race, probe.raceHtml, "FINAL");
+    // A published result means this race is overdue for odds recovery. The JRA
+    // final marker only controls FINAL confirmation; it must never suppress the
+    // actual odds fetch and leave an OFFICIAL race at zero rows.
+    const result = await refreshAllRaceOdds(
+      race,
+      probe.raceHtml,
+      probe.isFinal ? "FINAL" : undefined,
+    );
     const latest = await loadOddsMeta(race.raceKey);
     const missing = required.filter((type) => !latest.availableTypes.includes(type));
-    if (!missing.length && !result.missingBetTypes.length) {
+    if (probe.isFinal && !missing.length && !result.missingBetTypes.length) {
       const confirmedAt = latest.latestObservedAt ?? new Date().toISOString();
       await markFinalOddsConfirmed(race.raceKey, confirmedAt);
       return {

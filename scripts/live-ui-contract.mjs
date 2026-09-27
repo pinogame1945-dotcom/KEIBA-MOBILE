@@ -10,8 +10,13 @@ assert.ok(
   "venue header must not present one race surface as a meeting-wide attribute",
 );
 assert.ok(
-  week.includes("[venueStatusRace.weather, venueStatusRace.trackCondition]"),
-  "venue header should keep only venue-level weather/track condition summary",
+  week.includes("venueSnapshot.sourceObservedDate === selectedDate") &&
+  week.includes("latestTurfRace") &&
+  week.includes("latestDirtRace") &&
+  week.includes('"天候 " + venueWeather') &&
+  week.includes('"芝 " + venueTurf') &&
+  week.includes('"ダ " + venueDirt'),
+  "venue conditions must combine same-day JRA snapshot data with latest race-result weather/turf/dirt data",
 );
 
 for (const token of [
@@ -75,6 +80,31 @@ assert.ok(
 assert.ok(
   app.includes('if (last?.type === "RACE") return [...prev.slice(0, -1), next]'),
   "meeting switching must replace the current race route instead of growing navigation history",
+);
+
+
+assert.ok(
+  week.includes("!isFinal && styles.raceCardPast") &&
+  week.includes("<Text style={styles.resultBadge}>結果確定</Text>") &&
+  !week.includes('<Text style={styles.resultBadge}>結果</Text>'),
+  "final races must stay readable and use an explicit result-confirmed badge",
+);
+assert.ok(
+  week.includes("isFinal ? null : state") &&
+  week.includes('"天候 " + weather') &&
+  week.includes('"ダ " + dirt') &&
+  week.includes('"芝 " + turf'),
+  "race rows must use labeled weather/surface conditions without duplicating final state text",
+);
+assert.ok(
+  race.includes("autoOddsAttemptAt") &&
+  race.includes("nowMs - autoOddsAttemptAt.current < 60 * 1000") &&
+  !race.includes("autoOddsStarted"),
+  "missing odds must retry on a bounded interval instead of latching after one attempt",
+);
+assert.ok(
+  race.includes("venueSnapshot.sourceObservedDate === race.raceDate"),
+  "race detail must not treat a stale venue snapshot as current conditions",
 );
 
 console.log("LIVE UI contract: PASS");

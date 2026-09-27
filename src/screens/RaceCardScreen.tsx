@@ -183,7 +183,7 @@ export function RaceCardScreen({
   const [busy, setBusy] = useState<"race" | "odds" | "result" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(Date.now());
-  const autoOddsStarted = useRef(false);
+  const autoOddsAttemptAt = useRef(0);
   const autoResultRaceKey = useRef<string | null>(null);
   const autoCardRepairRaceKey = useRef<string | null>(null);
   const scrollRef = useRef<ScrollView | null>(null);
@@ -236,7 +236,7 @@ export function RaceCardScreen({
   }, [raceKey]);
 
   useEffect(() => {
-    autoOddsStarted.current = false;
+    autoOddsAttemptAt.current = 0;
     autoResultRaceKey.current = null;
     autoCardRepairRaceKey.current = null;
     cardScrollYRef.current = 0;
@@ -316,22 +316,24 @@ export function RaceCardScreen({
 
   useEffect(() => {
     if (
-      !active || !race || race.status !== "OFFICIAL" || !entries.length || autoOddsStarted.current ||
+      !active || !race || race.status !== "OFFICIAL" || !entries.length ||
       race.scheduleStatus !== "ACTIVE" || race.raceStatus === "CANCELLED" || race.raceStatus === "ABANDONED"
     ) return;
     if (finalOddsConfirmedAt) return;
-    const now = Date.now();
     const latestMs = latestObservedAt ? Date.parse(latestObservedAt) : 0;
     const hasLatest = Number.isFinite(latestMs) && latestMs > 0;
-    if (hasLatest && now - latestMs < 5 * 60 * 1000) return;
-    // Scheduled post time is not an actual-start signal. refreshLatestOdds keeps
-    // LIVE collection alive until a result exists, then switches to a light
-    // JRA final-marker probe before the one final all-bet fetch.
-    autoOddsStarted.current = true;
+    if (hasLatest && nowMs - latestMs < 5 * 60 * 1000) return;
+    if (autoOddsAttemptAt.current && nowMs - autoOddsAttemptAt.current < 60 * 1000) return;
+
+    // Missing odds are retried while the screen stays open. A failed or zero-row
+    // attempt must not permanently latch this race into "未取得" until navigation.
+    autoOddsAttemptAt.current = nowMs;
     void refreshLatestOdds(race, entries)
       .then(() => { onMutation?.(); return load(); })
       .catch(() => undefined);
-  }, [active, race, entries, latestObservedAt, finalOddsConfirmedAt, load, onMutation]);
+  }, [
+    active,race,entries,latestObservedAt,finalOddsConfirmedAt,load,onMutation,nowMs,
+  ]);
 
   useEffect(() => {
     if (
@@ -523,7 +525,9 @@ export function RaceCardScreen({
     race.raceStatus === "CANCELLED" || race.raceStatus === "ABANDONED";
   const isFuture = (raceStartEpoch(race) ?? Infinity) > Date.now();
   const snapshotUsable = Boolean(
-    venueSnapshot && (venueSnapshot.weather || venueSnapshot.turfCondition || venueSnapshot.dirtCondition),
+    venueSnapshot &&
+    venueSnapshot.sourceObservedDate === race.raceDate &&
+    (venueSnapshot.weather || venueSnapshot.turfCondition || venueSnapshot.dirtCondition),
   );
   const snapshotTrack = snapshotUsable && venueSnapshot
     ? race.discipline === "OBSTACLE" || race.surface === "MIXED"
