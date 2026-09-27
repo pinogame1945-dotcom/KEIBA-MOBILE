@@ -1,8 +1,9 @@
 import type { JraEntry, JraRace, OddsBetType } from "../domain/live";
-import { refreshAllRaceOdds } from "../data/jra/oddsCollector";
+import { probeJraFinalOdds, refreshAllRaceOdds } from "../data/jra/oddsCollector";
 import { bracketQuinellaOffered } from "../data/jra/oddsAvailability";
 import {
-  getLatestOddsRows,getLatestWinOddsByHorse,getOddsAvailability,getOddsRowsForSelection,
+  getFinalOddsConfirmedAt,getLatestOddsRows,getLatestWinOddsByHorse,getOddsAvailability,getOddsRowsForSelection,
+  getRaceResultCompleteness,markFinalOddsConfirmed,markFinalOddsProbe,
 } from "../repositories/liveRepository";
 
 const LABEL: Record<OddsBetType, string> = {
@@ -32,9 +33,11 @@ export async function loadOddsMeta(raceKey: string) {
     .map((row) => Date.parse(row.observedAt))
     .filter(Number.isFinite)
     .sort((a,b) => b-a)[0];
+  const finalConfirmedAt = await getFinalOddsConfirmedAt(raceKey);
   return {
     availableTypes: availability.map((row) => row.betType),
     latestObservedAt: Number.isFinite(latestObservedAt) ? new Date(latestObservedAt).toISOString() : null,
+    finalConfirmedAt,
   };
 }
 
@@ -70,9 +73,63 @@ export async function loadOdds(raceKey: string) {
 
 export async function refreshLatestOdds(race: JraRace, entries: JraEntry[]) {
   if (race.status !== "OFFICIAL") throw new Error("正式出馬表取得後にオッズを更新できる");
+
+  const required = requiredOddsTypes(entries);
+  const alreadyFinal = await getFinalOddsConfirmedAt(race.raceKey);
+  if (alreadyFinal) {
+    const latest = await loadOddsMeta(race.raceKey);
+    const missing = required.filter((type) => !latest.availableTypes.includes(type));
+    return {
+      betTypes: latest.availableTypes,
+      rowCount: 0,
+      visitedPages: 0,
+      missingBetTypes: missing,
+      ...latest,
+      missing,
+      finalConfirmed: true,
+    };
+  }
+
+  const settlement = await getRaceResultCompleteness(race.raceKey);
+  if (settlement.resultReady) {
+    const probeAt = new Date().toISOString();
+    await markFinalOddsProbe(race.raceKey, probeAt);
+    const probe = await probeJraFinalOdds(race);
+    if (!probe.isFinal) {
+      const latest = await loadOddsMeta(race.raceKey);
+      const missing = required.filter((type) => !latest.availableTypes.includes(type));
+      return {
+        betTypes: latest.availableTypes,
+        rowCount: 0,
+        visitedPages: probe.checkedPages,
+        missingBetTypes: missing,
+        ...latest,
+        missing,
+        finalConfirmed: false,
+      };
+    }
+
+    const result = await refreshAllRaceOdds(race, probe.raceHtml, "FINAL");
+    const latest = await loadOddsMeta(race.raceKey);
+    const missing = required.filter((type) => !latest.availableTypes.includes(type));
+    if (!missing.length && !result.missingBetTypes.length) {
+      const confirmedAt = latest.latestObservedAt ?? new Date().toISOString();
+      await markFinalOddsConfirmed(race.raceKey, confirmedAt);
+      return {
+        ...result,
+        ...latest,
+        finalConfirmedAt: confirmedAt,
+        missing,
+        finalConfirmed: true,
+      };
+    }
+    return { ...result, ...latest, missing, finalConfirmed: false };
+  }
+
+  // No official result yet: the scheduled post time is not treated as the real
+  // start. Keep LIVE odds refreshes working through delays and race-day trouble.
   const result = await refreshAllRaceOdds(race);
   const latest = await loadOddsMeta(race.raceKey);
-  const required = requiredOddsTypes(entries);
   const missing = required.filter((type) => !latest.availableTypes.includes(type));
-  return { ...result, ...latest, missing };
+  return { ...result, ...latest, missing, finalConfirmed: false };
 }
