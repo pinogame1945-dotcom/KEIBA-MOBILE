@@ -10,6 +10,7 @@ import {
   getVenueConditionSnapshot, listRaceKeysWithResults, listRacingWeekRaces, localTodayIso,
 } from "../repositories/liveRepository";
 import { refreshScheduleTarget } from "../services/scheduleTargetService";
+import { refreshTodayVenueConditions } from "../services/venueConditionService";
 import {
   refreshCurrentWeekRaceData, type RaceRefreshProgress,
 } from "../services/raceRefreshService";
@@ -59,6 +60,8 @@ export function WeekRacesScreen({
     setError(null);
     try {
       await refreshScheduleTarget(true);
+      await load();
+      await refreshTodayVenueConditions(true).catch(() => undefined);
       await load();
       await refreshCurrentWeekRaceData(setProgress, async () => { await load(); });
       await load();
