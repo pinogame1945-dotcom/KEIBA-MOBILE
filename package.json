@@ -21,7 +21,8 @@
     "expo:config:smoke": "expo config --type public --json > /dev/null",
     "android:smoke": "expo export --platform android --output-dir dist-android-smoke --clear",
     "android:prebuild:smoke": "expo prebuild --platform android --no-install --clean",
-    "result-archive:contract": "node scripts/result-archive-contract.mjs"
+    "result-archive:contract": "node scripts/result-archive-contract.mjs",
+    "smoke:result-archive-guard": "node --experimental-strip-types scripts/result-archive-guard-regression.ts"
   },
   "dependencies": {
     "cheerio": "1.0.0-rc.12",
