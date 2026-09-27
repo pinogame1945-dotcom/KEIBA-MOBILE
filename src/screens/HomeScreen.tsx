@@ -64,7 +64,7 @@ export function HomeScreen({ onOpenWeek, onOpenRace, active = true, cacheRevisio
     try {
       await refreshScheduleTarget(true);
       await load();
-      await refreshCurrentWeekRaceData(undefined, load);
+      await refreshCurrentWeekRaceData(undefined, async () => { await load(); });
       await load();
     } catch {
       // Home stays usable from local cache even if JRA is temporarily unavailable.
