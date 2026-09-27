@@ -5,5 +5,7 @@ export function isJraFinalOddsHtml(html: string) {
     .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;|&#160;/gi, " ")
     .replace(/\s+/g, "");
-  return normalized.includes("最終オッズ");
+  return normalized.includes("オッズは最終オッズ") ||
+    normalized.includes("最終オッズです") ||
+    normalized.includes("最終オッズを表示");
 }
