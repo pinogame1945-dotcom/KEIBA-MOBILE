@@ -156,6 +156,42 @@ export function inferGateFromHorseNo(horseNo:number|null,fieldSize:number):numbe
   return null;
 }
 
+function isInactiveEntryRow(row:ExtractedOfficialEntryRow){
+  return /(?:取消|除外)/.test(row.rowText);
+}
+
+function recoverInactiveNumbering(rows:ExtractedOfficialEntryRow[]){
+  const known=rows.map(row=>row.horseNo).filter((value):value is number=>value!=null);
+  const fieldSize=Math.max(rows.length,...known,0);
+  if(fieldSize<1||fieldSize>18)return rows;
+
+  const unresolved=rows.filter(row=>row.horseNo==null);
+  if(!unresolved.length)return rows;
+  if(unresolved.some(row=>!isInactiveEntryRow(row)))return rows;
+
+  const used=new Set(known);
+  const missing=Array.from({length:fieldSize},(_,index)=>index+1).filter(no=>!used.has(no));
+  if(missing.length!==unresolved.length)return rows;
+
+  let missingIndex=0;
+  const recovered=rows.map(row=>{
+    if(row.horseNo!=null)return row;
+    const horseNo=missing[missingIndex++];
+    return {
+      ...row,
+      horseNo,
+      gate:row.gate??inferGateFromHorseNo(horseNo,fieldSize),
+    };
+  });
+
+  const numbers=recovered.map(row=>row.horseNo);
+  if(numbers.some(no=>no==null))return rows;
+  for(let i=1;i<numbers.length;i+=1){
+    if((numbers[i-1] as number)>=(numbers[i] as number))return rows;
+  }
+  return recovered;
+}
+
 export function extractOfficialEntryRows(html:string):ExtractedOfficialEntryRow[]{
   const $=load(html);
   const table=pickTable($);
@@ -202,8 +238,9 @@ export function extractOfficialEntryRows(html:string):ExtractedOfficialEntryRow[
       explicitHorseNo:no!=null,
     });
   }
+  const recoveredRows=recoverInactiveNumbering(rows);
   const unique=new Map<string,ExtractedOfficialEntryRow>();
-  for(const row of rows){
+  for(const row of recoveredRows){
     const key=String(row.horseNo??"")+":"+row.horseName;
     if(!unique.has(key))unique.set(key,row);
   }
