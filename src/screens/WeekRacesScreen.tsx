@@ -234,7 +234,11 @@ export function WeekRacesScreen({
               </Text>
             </View>
             <Text style={styles.updated}>
-              {localClock(venueUpdatedAt) ? "馬場取得 " + localClock(venueUpdatedAt) : "馬場取得時刻なし"}
+              {localClock(venueUpdatedAt)
+                ? "馬場取得 " + localClock(venueUpdatedAt)
+                : venueStatusRace.weather || venueStatusRace.trackCondition
+                  ? "結果情報から取得"
+                  : "馬場取得時刻なし"}
             </Text>
           </View>
         ) : null}
