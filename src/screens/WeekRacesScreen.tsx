@@ -3,12 +3,13 @@ import {
   ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import type { JraRace } from "../domain/live";
+import type { JraRace, VenueConditionSnapshot } from "../domain/live";
 import { raceStartEpoch } from "../data/jra/oddsAvailability";
 import { raceCourseLabel, raceStateLabel } from "../ui/raceLabels";
 import {
-  listRaceKeysWithResults, listRacingWeekRaces, localTodayIso, racingWeekCandidateDates,
+  getVenueConditionSnapshot, listRaceKeysWithResults, listRacingWeekRaces, localTodayIso,
 } from "../repositories/liveRepository";
+import { refreshScheduleTarget } from "../services/scheduleTargetService";
 import {
   refreshCurrentWeekRaceData, type RaceRefreshProgress,
 } from "../services/raceRefreshService";
@@ -41,13 +42,12 @@ export function WeekRacesScreen({
   const [refreshing, setRefreshing] = useState(false);
   const [progress, setProgress] = useState<RaceRefreshProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [venueSnapshot, setVenueSnapshot] = useState<VenueConditionSnapshot | null>(null);
 
   const load = useCallback(async () => {
-    const dates = racingWeekCandidateDates();
-    const [nextRaces, keys] = await Promise.all([
-      listRacingWeekRaces(),
-      listRaceKeysWithResults(dates),
-    ]);
+    const nextRaces = await listRacingWeekRaces();
+    const dates = [...new Set(nextRaces.map((race) => race.raceDate))];
+    const keys = await listRaceKeysWithResults(dates);
     setRaces(nextRaces);
     setResultKeys(new Set(keys));
     return nextRaces;
@@ -58,7 +58,9 @@ export function WeekRacesScreen({
     setRefreshing(true);
     setError(null);
     try {
-      await refreshCurrentWeekRaceData(setProgress);
+      await refreshScheduleTarget(true);
+      await load();
+      await refreshCurrentWeekRaceData(setProgress, load);
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -103,6 +105,18 @@ export function WeekRacesScreen({
     [dayRaces, selectedVenue],
   );
 
+  useEffect(() => {
+    if (!selectedDate || !selectedVenue) {
+      setVenueSnapshot(null);
+      return;
+    }
+    let cancelled = false;
+    void getVenueConditionSnapshot(selectedDate, selectedVenue)
+      .then((snapshot) => { if (!cancelled) setVenueSnapshot(snapshot ?? null); })
+      .catch(() => { if (!cancelled) setVenueSnapshot(null); });
+    return () => { cancelled = true; };
+  }, [selectedDate, selectedVenue, cacheRevision, refreshing]);
+
   const now = Date.now();
   const nextRaceKey = visible
     .filter((race) => {
@@ -111,7 +125,32 @@ export function WeekRacesScreen({
     })
     .sort((a,b) => (raceStartEpoch(a) ?? Infinity) - (raceStartEpoch(b) ?? Infinity))[0]?.raceKey ?? null;
 
-  const venueStatusRace = [...visible].reverse().find((race) => race.weather || race.trackCondition || race.surface) ?? visible[0];
+  const venueStatusRace = [...visible].reverse().find((race) => race.weather || race.trackCondition) ?? visible[0];
+  const snapshotCurrent = venueSnapshot?.sourceObservedDate === selectedDate;
+  const venueStatusText = snapshotCurrent && venueSnapshot
+    ? [
+        venueSnapshot.weather ? "天候 " + venueSnapshot.weather : null,
+        venueSnapshot.turfCondition ? "芝 " + venueSnapshot.turfCondition : null,
+        venueSnapshot.dirtCondition ? "ダ " + venueSnapshot.dirtCondition : null,
+      ].filter(Boolean).join(" / ")
+    : venueStatusRace && (venueStatusRace.weather || venueStatusRace.trackCondition)
+      ? [venueStatusRace.weather, venueStatusRace.trackCondition].filter(Boolean).join(" / ")
+      : venueSnapshot?.sourceObservedDate
+        ? "当日馬場未取得（" + venueSnapshot.sourceObservedDate.slice(5).replace("-","/") + "時点）"
+        : "馬場情報 未取得";
+  const venueUpdatedAt = venueSnapshot?.fetchedAt ?? null;
+
+  const conditionForRace = (race: JraRace) => {
+    if (race.weather || race.trackCondition) return [race.weather, race.trackCondition].filter(Boolean);
+    if (!snapshotCurrent || !venueSnapshot) return [];
+    const track = race.discipline === "OBSTACLE" || race.surface === "MIXED"
+      ? [venueSnapshot.turfCondition && "芝" + venueSnapshot.turfCondition,
+          venueSnapshot.dirtCondition && "ダ" + venueSnapshot.dirtCondition].filter(Boolean).join(" / ")
+      : race.surface === "DIRT"
+        ? venueSnapshot.dirtCondition
+        : venueSnapshot.turfCondition;
+    return [venueSnapshot.weather, track].filter(Boolean);
+  };
 
   return (
     <SafeAreaView edges={["top"]} style={styles.safeArea}>
@@ -171,10 +210,12 @@ export function WeekRacesScreen({
             <View>
               <Text style={styles.venueStatusTitle}>{selectedVenue}</Text>
               <Text style={styles.venueStatusMeta}>
-                {[venueStatusRace.weather, venueStatusRace.trackCondition].filter(Boolean).join(" / ") || "状態取得待ち"}
+                {venueStatusText}
               </Text>
             </View>
-            <Text style={styles.updated}>最終更新 {venueStatusRace.fetchedAt.slice(11,16)}</Text>
+            <Text style={styles.updated}>
+              {venueUpdatedAt ? "馬場取得 " + venueUpdatedAt.slice(11,16) : "馬場取得時刻なし"}
+            </Text>
           </View>
         ) : null}
 
@@ -207,7 +248,7 @@ export function WeekRacesScreen({
                   {[race.raceClass, raceCourseLabel(race)].filter(Boolean).join("　") || "詳細取得待ち"}
                 </Text>
                 <Text style={styles.raceCondition}>
-                  {[race.weather, race.trackCondition, state].filter(Boolean).join(" / ")}
+                  {[...conditionForRace(race), state].filter(Boolean).join(" / ")}
                 </Text>
               </View>
               <Text style={styles.chevron}>›</Text>
