@@ -108,7 +108,12 @@ export function TodayRacesScreen({ onBack }: Props) {
                   </Text>
                 </View>
                 <View style={[styles.badge, race.status === "OFFICIAL" ? styles.official : styles.scheduled]}>
-                  <Text style={styles.badgeText}>{race.status === "OFFICIAL" ? "出馬表" : "予定"}</Text>
+                  <Text style={styles.badgeText}>{
+                    race.scheduleStatus === "RESCHEDULED" ? "順延"
+                      : race.raceStatus === "CANCELLED" ? "中止"
+                        : race.raceStatus === "ABANDONED" ? "取止"
+                          : race.status === "OFFICIAL" ? "出馬表" : "予定"
+                  }</Text>
                 </View>
               </TouchableOpacity>
             ))}
