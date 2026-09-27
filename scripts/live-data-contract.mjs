@@ -10,6 +10,9 @@ const repository = readFileSync(new URL("../src/repositories/liveRepository.ts",
 const sync = readFileSync(new URL("../src/services/liveSyncService.ts", import.meta.url), "utf8");
 const venue = readFileSync(new URL("../src/services/venueConditionService.ts", import.meta.url), "utf8");
 const schedule = readFileSync(new URL("../src/services/scheduleTargetService.ts", import.meta.url), "utf8");
+const storage = readFileSync(new URL("../src/storage/liveDb.ts", import.meta.url), "utf8");
+const odds = readFileSync(new URL("../src/services/oddsService.ts", import.meta.url), "utf8");
+const oddsCollector = readFileSync(new URL("../src/data/jra/oddsCollector.ts", import.meta.url), "utf8");
 
 for (const token of ["PENDING","FETCHING","RETRY","DONE","FAILED","attempts<3","race_fetch_target","COMPLETED"]) {
   assert.ok(queue.includes(token), "persistent JRA fetch queue contract missing: " + token);
@@ -52,14 +55,30 @@ assert.ok(
   "warm/sync paths must repair layers independently instead of full-week blocking",
 );
 assert.ok(
-  repository.includes("complete:resultCount>0&&payoutCount>0") &&
-  !repository.includes("complete:resultCount>0&&payoutCount>0&&conditionsComplete"),
-  "stored result settlement must not be held incomplete by missing venue conditions",
+  repository.includes("resultReady=resultCount>0") &&
+  repository.includes("payoutReady=payoutCount>0") &&
+  repository.includes("complete:resultReady"),
+  "finish-order readiness must be independent from payout repair",
 );
 assert.ok(
-  sync.includes("ODDS_FINAL_DELAY_MS") &&
-  screen.includes("ODDS_FINAL_DELAY_MS"),
-  "final odds must have automatic post-race refresh paths",
+  sync.includes("refreshIncompletePayouts") &&
+  sync.includes("completeness.resultReady"),
+  "payout repair must not consume result-collection slots",
+);
+assert.ok(
+  storage.includes("withLiveDbWrite") &&
+  storage.includes("withLiveDbTransaction") &&
+  repository.includes("withLiveDbTransaction") &&
+  queue.includes("withLiveDbTransaction"),
+  "all LIVE mutations must share the serialized database write lane",
+);
+assert.ok(
+  odds.includes("probeJraFinalOdds") &&
+  odds.includes("markFinalOddsConfirmed") &&
+  oddsCollector.includes('"POSTTIME"') &&
+  !sync.includes("ODDS_FINAL_DELAY_MS") &&
+  !screen.includes("ODDS_FINAL_DELAY_MS"),
+  "final odds must be confirmed from JRA state rather than elapsed scheduled time",
 );
 assert.ok(
   !repository.includes("saveScheduleMeetings") &&
