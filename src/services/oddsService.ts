@@ -72,6 +72,10 @@ export async function loadOdds(raceKey: string) {
 }
 
 export async function refreshLatestOdds(race: JraRace, entries: JraEntry[]) {
+  if (race.scheduleStatus !== "ACTIVE") throw new Error("順延前の日程のオッズは更新しない");
+  if (race.raceStatus === "CANCELLED" || race.raceStatus === "ABANDONED") {
+    throw new Error("中止・取りやめレースのオッズは更新しない");
+  }
   if (race.status !== "OFFICIAL") throw new Error("正式出馬表取得後にオッズを更新できる");
 
   const required = requiredOddsTypes(entries);
