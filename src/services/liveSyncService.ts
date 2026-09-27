@@ -100,10 +100,12 @@ export function syncLiveCache(onMutation?:()=>void){
   if(syncPromise)return syncPromise;
   syncPromise=(async()=>{
     await refreshScheduleIfDue(onMutation).catch(()=>undefined);
-    await refreshTodayVenueConditions().then(()=>onMutation?.()).catch(()=>undefined);
-    await refreshCardLayer(onMutation).catch(()=>undefined);
-    await refreshOneIncompleteResult(onMutation);
-    await refreshOneUpcomingOdds();
+    await Promise.allSettled([
+      refreshTodayVenueConditions().then(()=>onMutation?.()),
+      refreshCardLayer(onMutation),
+      refreshOneIncompleteResult(onMutation),
+      refreshOneUpcomingOdds(),
+    ]);
   })().finally(()=>{syncPromise=null;});
   return syncPromise;
 }
