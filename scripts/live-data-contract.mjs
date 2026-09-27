@@ -6,18 +6,20 @@ const refresh = readFileSync(new URL("../src/services/raceRefreshService.ts", im
 const result = readFileSync(new URL("../src/services/resultService.ts", import.meta.url), "utf8");
 const parser = readFileSync(new URL("../src/data/netkeiba/resultParser.ts", import.meta.url), "utf8");
 const screen = readFileSync(new URL("../src/screens/RaceCardScreen.tsx", import.meta.url), "utf8");
+const repository = readFileSync(new URL("../src/repositories/liveRepository.ts", import.meta.url), "utf8");
+const sync = readFileSync(new URL("../src/services/liveSyncService.ts", import.meta.url), "utf8");
 
 for (const token of ["PENDING","FETCHING","RETRY","DONE","FAILED","attempts<3","race_fetch_target"]) {
   assert.ok(queue.includes(token), "persistent JRA fetch queue contract missing: " + token);
 }
 for (const token of [
-  "authoritativeRaceNos","recordNavigationEvidence","prepareRaceFetchRun",
+  "authoritativeRaceNos","recordEvidence","prepareRaceFetchRun",
   "claimNextRaceFetchItem","markRaceFetchFailed","findRaceFetchUrl",
 ]) {
   assert.ok(refresh.includes(token), "JRA refresh recovery contract missing: " + token);
 }
 assert.ok(
-  refresh.includes("saveOfficialMeeting(meetingCards, expected)"),
+  refresh.includes("saveOfficialMeeting(cards,expected)"),
   "verified formal navigation set must drive atomic meeting persistence",
 );
 assert.ok(
@@ -33,6 +35,18 @@ for (const token of ["race_table_01","RaceTable01","All_Result_Table","normalize
 assert.ok(
   screen.includes("autoCardRepairRaceKey") && screen.includes("出馬表を再取得"),
   "stuck schedule-only race must have automatic and manual repair paths",
+);
+assert.ok(
+  repository.includes("getScheduleTarget") &&
+  repository.includes("scheduleRaceAsDisplay") &&
+  repository.includes("listOfficialRacesForDates"),
+  "schedule display must be independent from formal race persistence",
+);
+assert.ok(
+  sync.includes("getRaceResultCompleteness") &&
+  sync.includes("refreshRaceState(race)") &&
+  !sync.includes("await refreshCurrentWeekRaceData().catch"),
+  "warm/sync paths must repair layers independently instead of full-week blocking",
 );
 
 console.log("LIVE data contract: PASS");
