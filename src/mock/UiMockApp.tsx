@@ -22,6 +22,9 @@ type Page = "HOME" | "RACES" | "RACE";
 type OddsTab = keyof typeof oddsByType;
 type RaceTab = "出走表" | "オッズ" | "レース情報" | "結果";
 type SortMode = "馬番順" | "人気順" | "AI予想順";
+type OddsViewMode = "通常オッズ" | "馬別ランキング";
+
+const horseOddsTabs: OddsTab[] = ["枠連", "馬連", "ワイド", "馬単", "3連複", "3連単"];
 
 const gateColors: Record<number, { bg: string; fg: string }> = {
   1: { bg: "#ffffff", fg: "#111827" },
@@ -208,7 +211,7 @@ function Races({ back, openRace }: { back: () => void; openRace: (race: MockRace
   );
 }
 
-function HorseSheet({ horse, close }: { horse: MockHorse; close: () => void }) {
+function HorseSheet({ horse, close, openHorseOdds }: { horse: MockHorse; close: () => void; openHorseOdds: (horse: MockHorse) => void }) {
   const gate = gateColors[horse.gate] ?? gateColors[1];
   return (
     <Modal transparent animationType="slide" visible onRequestClose={close}>
@@ -235,17 +238,44 @@ function HorseSheet({ horse, close }: { horse: MockHorse; close: () => void }) {
             <View style={styles.detailRow}><Text style={styles.detailKey}>父</Text><Text style={styles.detailValue}>{horse.sire}</Text></View>
             <View style={styles.detailRow}><Text style={styles.detailKey}>母父</Text><Text style={styles.detailValue}>{horse.damsire}</Text></View>
           </View>
+          {horse.status === "ACTIVE" ? (
+            <TouchableOpacity style={styles.horseOddsJump} onPress={() => openHorseOdds(horse)}>
+              <Text style={styles.horseOddsJumpText}>この馬が絡むオッズを見る →</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
       </View>
     </Modal>
   );
 }
 
-function Race({ race, back }: { race: MockRace; back: () => void }) {
+function Race({ race, back, openRaces, openRace }: { race: MockRace; back: () => void; openRaces: () => void; openRace: (race: MockRace) => void }) {
   const [horse, setHorse] = useState<MockHorse | null>(null);
   const [raceTab, setRaceTab] = useState<RaceTab>("出走表");
   const [sortMode, setSortMode] = useState<SortMode>("馬番順");
   const [oddsTab, setOddsTab] = useState<OddsTab>("単勝");
+  const [oddsViewMode, setOddsViewMode] = useState<OddsViewMode>("通常オッズ");
+  const [selectedHorseNo, setSelectedHorseNo] = useState<number>(race.horses.find((h) => h.status === "ACTIVE")?.no ?? 1);
+
+  const sameVenueRaces = races
+    .filter((item) => item.raceDate === race.raceDate && item.venue === race.venue)
+    .sort((a, b) => a.raceNo - b.raceNo);
+  const sameVenueIndex = sameVenueRaces.findIndex((item) => item.id === race.id);
+  const previousRace = sameVenueIndex > 0 ? sameVenueRaces[sameVenueIndex - 1] : null;
+  const nextRace = sameVenueIndex >= 0 && sameVenueIndex < sameVenueRaces.length - 1 ? sameVenueRaces[sameVenueIndex + 1] : null;
+  const selectedHorse = race.horses.find((h) => h.no === selectedHorseNo) ?? race.horses[0];
+
+  const openHorseOdds = (target: MockHorse) => {
+    setSelectedHorseNo(target.no);
+    setOddsViewMode("馬別ランキング");
+    setOddsTab("馬連");
+    setRaceTab("オッズ");
+    setHorse(null);
+  };
+
+  const displayedOddsRows = oddsViewMode === "通常オッズ"
+    ? oddsByType[oddsTab]
+    : oddsByType[oddsTab].filter(([selection]) => selection.split("-").map(Number).includes(selectedHorseNo));
 
   const sortedHorses = [...race.horses].sort((a, b) => {
     if (sortMode === "人気順") return (a.popularity ?? 999) - (b.popularity ?? 999);
@@ -269,6 +299,28 @@ function Race({ race, back }: { race: MockRace; back: () => void }) {
             </View>
             <Pill dark>{race.status === "CLOSED" ? "終了" : "発走前"}</Pill>
           </View>
+        </View>
+
+        <View style={styles.raceNavigator}>
+          <TouchableOpacity
+            disabled={!previousRace}
+            onPress={() => previousRace && openRace(previousRace)}
+            style={[styles.raceNavSide, !previousRace && styles.raceNavDisabled]}
+          >
+            <Text style={styles.raceNavArrow}>‹</Text>
+            <Text style={styles.raceNavLabel}>{previousRace ? previousRace.raceNo + "R" : "前Rなし"}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.raceNavCenter} onPress={openRaces}>
+            <Text style={styles.raceNavCenterText}>今週のレース</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            disabled={!nextRace}
+            onPress={() => nextRace && openRace(nextRace)}
+            style={[styles.raceNavSide, styles.raceNavSideRight, !nextRace && styles.raceNavDisabled]}
+          >
+            <Text style={styles.raceNavLabel}>{nextRace ? nextRace.raceNo + "R" : "次Rなし"}</Text>
+            <Text style={styles.raceNavArrow}>›</Text>
+          </TouchableOpacity>
         </View>
 
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.raceTabs}>
@@ -334,12 +386,48 @@ function Race({ race, back }: { race: MockRace; back: () => void }) {
               <View>
                 <Text style={styles.oddsFreshLabel}>最新オッズ</Text>
                 <Text style={styles.oddsFreshTime}>最終取得 13:44:18</Text>
+                <Text style={styles.oddsFreshAgo}>約15秒前</Text>
               </View>
               <TouchableOpacity style={styles.refreshOddsButton}><Text style={styles.refreshOddsText}>更新 ↻</Text></TouchableOpacity>
             </View>
 
+            <View style={styles.oddsModeTabs}>
+              {(["通常オッズ", "馬別ランキング"] as OddsViewMode[]).map((mode) => (
+                <TouchableOpacity
+                  key={mode}
+                  onPress={() => {
+                    setOddsViewMode(mode);
+                    if (mode === "馬別ランキング" && !horseOddsTabs.includes(oddsTab)) setOddsTab("馬連");
+                  }}
+                  style={[styles.oddsModeTab, oddsViewMode === mode && styles.oddsModeTabActive]}
+                >
+                  <Text style={[styles.oddsModeTabText, oddsViewMode === mode && styles.oddsModeTabTextActive]}>{mode}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {oddsViewMode === "馬別ランキング" ? (
+              <>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horsePicker}>
+                  {race.horses.filter((item) => item.status === "ACTIVE").map((item) => (
+                    <TouchableOpacity
+                      key={item.no}
+                      onPress={() => setSelectedHorseNo(item.no)}
+                      style={[styles.horsePickerChip, selectedHorseNo === item.no && styles.horsePickerChipActive]}
+                    >
+                      <Text style={[styles.horsePickerNo, selectedHorseNo === item.no && styles.horsePickerNoActive]}>{item.no}</Text>
+                      <Text style={[styles.horsePickerName, selectedHorseNo === item.no && styles.horsePickerNameActive]}>{item.name}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+                <Text style={styles.horseOddsHeading}>
+                  {selectedHorse.no}番 {selectedHorse.name} が絡む {oddsTab}オッズランキング
+                </Text>
+              </>
+            ) : null}
+
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.oddsTabs}>
-              {(Object.keys(oddsByType) as OddsTab[]).map((tab) => (
+              {(oddsViewMode === "通常オッズ" ? (Object.keys(oddsByType) as OddsTab[]) : horseOddsTabs).map((tab) => (
                 <TouchableOpacity key={tab} onPress={() => setOddsTab(tab)} style={[styles.oddsTab, oddsTab === tab && styles.oddsTabActive]}>
                   <Text style={[styles.oddsTabText, oddsTab === tab && styles.oddsTabTextActive]}>{tab}</Text>
                 </TouchableOpacity>
@@ -347,13 +435,15 @@ function Race({ race, back }: { race: MockRace; back: () => void }) {
             </ScrollView>
 
             <View style={styles.cardFlat}>
-              {oddsByType[oddsTab].map(([selection, price], index) => (
+              {displayedOddsRows.length > 0 ? displayedOddsRows.map(([selection, price], index) => (
                 <View key={selection} style={[styles.oddsRow, index > 0 && styles.borderTop]}>
                   <View style={styles.oddsRank}><Text style={styles.oddsRankText}>{index + 1}</Text></View>
                   <Text style={styles.oddsSelection}>{selection}</Text>
                   <Text style={styles.oddsPrice}>{price}</Text>
                 </View>
-              ))}
+              )) : (
+                <View style={styles.emptyOdds}><Text style={styles.emptyOddsText}>この条件のオッズはまだありません</Text></View>
+              )}
             </View>
           </>
         ) : null}
@@ -409,7 +499,7 @@ function Race({ race, back }: { race: MockRace; back: () => void }) {
         ) : null}
       </ScrollView>
 
-      {horse ? <HorseSheet horse={horse} close={() => setHorse(null)} /> : null}
+      {horse ? <HorseSheet horse={horse} close={() => setHorse(null)} openHorseOdds={openHorseOdds} /> : null}
     </View>
   );
 }
@@ -426,7 +516,7 @@ export function UiMockApp() {
   const body = useMemo(() => {
     if (page === "HOME") return <Home openRaces={() => setPage("RACES")} openRace={openRace} />;
     if (page === "RACES") return <Races back={() => setPage("HOME")} openRace={openRace} />;
-    if (race) return <Race race={race} back={() => setPage("RACES")} />;
+    if (race) return <Race key={race.id} race={race} back={() => setPage("RACES")} openRaces={() => setPage("RACES")} openRace={openRace} />;
     return <Home openRaces={() => setPage("RACES")} openRace={openRace} />;
   }, [page, race]);
 
@@ -535,6 +625,14 @@ const styles = StyleSheet.create({
   compactRaceName: { color: "#fff", fontSize: 18, fontWeight: "900", flexShrink: 1 },
   compactRaceMeta: { color: "#d1d5db", fontSize: 11, fontWeight: "700", marginTop: 5 },
 
+  raceNavigator: { flexDirection: "row", alignItems: "center", backgroundColor: "#fff", borderRadius: 14, padding: 4 },
+  raceNavSide: { width: 82, minHeight: 38, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4 },
+  raceNavSideRight: { justifyContent: "center" },
+  raceNavDisabled: { opacity: 0.28 },
+  raceNavArrow: { color: "#111827", fontSize: 22, fontWeight: "700" },
+  raceNavLabel: { color: "#111827", fontSize: 11, fontWeight: "900" },
+  raceNavCenter: { flex: 1, minHeight: 38, backgroundColor: "#111827", borderRadius: 10, alignItems: "center", justifyContent: "center" },
+  raceNavCenterText: { color: "#fff", fontSize: 11, fontWeight: "900" },
   raceTabs: { gap: 7 },
   raceTab: { backgroundColor: "#e5e7eb", borderRadius: 12, paddingHorizontal: 16, paddingVertical: 10 },
   raceTabActive: { backgroundColor: "#111827" },
@@ -570,6 +668,8 @@ const styles = StyleSheet.create({
   modalRoot: { flex: 1, justifyContent: "flex-end" },
   modalBackdrop: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, backgroundColor: "rgba(0,0,0,0.34)" },
   bottomSheet: { backgroundColor: "#111827", borderTopLeftRadius: 26, borderTopRightRadius: 26, padding: 18, paddingBottom: 34 },
+  horseOddsJump: { marginTop: 16, backgroundColor: "#fff", borderRadius: 14, paddingVertical: 13, alignItems: "center" },
+  horseOddsJumpText: { color: "#111827", fontSize: 12, fontWeight: "900" },
   sheetHandle: { width: 46, height: 4, borderRadius: 2, backgroundColor: "#4b5563", alignSelf: "center", marginBottom: 16 },
   sheetHorseNo: { width: 46, borderLeftWidth: 6, paddingLeft: 7 },
   sheetHorseNoLabel: { color: "#9ca3af", fontSize: 8, fontWeight: "800" },
@@ -585,6 +685,22 @@ const styles = StyleSheet.create({
   oddsFreshness: { backgroundColor: "#111827", borderRadius: 16, padding: 14, flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   oddsFreshLabel: { color: "#9ca3af", fontSize: 10, fontWeight: "800" },
   oddsFreshTime: { color: "#fff", fontSize: 16, fontWeight: "900", marginTop: 2 },
+  oddsFreshAgo: { color: "#9ca3af", fontSize: 9, fontWeight: "700", marginTop: 2 },
+  oddsModeTabs: { flexDirection: "row", backgroundColor: "#e5e7eb", borderRadius: 13, padding: 4 },
+  oddsModeTab: { flex: 1, alignItems: "center", paddingVertical: 9, borderRadius: 10 },
+  oddsModeTabActive: { backgroundColor: "#fff" },
+  oddsModeTabText: { color: "#6b7280", fontSize: 11, fontWeight: "800" },
+  oddsModeTabTextActive: { color: "#111827", fontWeight: "900" },
+  horsePicker: { gap: 7, paddingBottom: 2 },
+  horsePickerChip: { backgroundColor: "#e5e7eb", borderRadius: 12, paddingHorizontal: 11, paddingVertical: 8, minWidth: 74 },
+  horsePickerChipActive: { backgroundColor: "#111827" },
+  horsePickerNo: { color: "#111827", fontSize: 12, fontWeight: "900" },
+  horsePickerNoActive: { color: "#fff" },
+  horsePickerName: { color: "#6b7280", fontSize: 8, fontWeight: "700", marginTop: 2 },
+  horsePickerNameActive: { color: "#d1d5db" },
+  horseOddsHeading: { color: "#111827", fontSize: 12, fontWeight: "900" },
+  emptyOdds: { minHeight: 72, alignItems: "center", justifyContent: "center" },
+  emptyOddsText: { color: "#6b7280", fontSize: 11, fontWeight: "700" },
   refreshOddsButton: { backgroundColor: "#374151", paddingHorizontal: 13, paddingVertical: 9, borderRadius: 11 },
   refreshOddsText: { color: "#fff", fontSize: 11, fontWeight: "900" },
   oddsTabs: { gap: 7, paddingBottom: 2 },
