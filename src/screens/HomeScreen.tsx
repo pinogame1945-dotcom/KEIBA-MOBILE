@@ -27,13 +27,21 @@ function noticeText(notice: RaceNotice) {
   if (notice.kind === "WEATHER_CHANGED") return "天候が変更";
   if (notice.kind === "START_TIME_CHANGED") return "発走時刻が変更";
   if (notice.kind === "SCRATCHED") return "出走取消";
-  return "競走除外";
+  if (notice.kind === "EXCLUDED") return "競走除外";
+  if (notice.kind === "MEETING_RESCHEDULED") return "開催日が順延";
+  if (notice.kind === "MEETING_CANCELLED") return "開催中止";
+  return "競走取りやめ";
 }
 
 function noticeDetail(notice: RaceNotice) {
-  if (notice.kind === "TRACK_CHANGED" || notice.kind === "WEATHER_CHANGED" || notice.kind === "START_TIME_CHANGED") {
+  if (
+    notice.kind === "TRACK_CHANGED" || notice.kind === "WEATHER_CHANGED" ||
+    notice.kind === "START_TIME_CHANGED" || notice.kind === "MEETING_RESCHEDULED"
+  ) {
     return `${notice.previousValue ?? "?"} → ${notice.nextValue ?? "?"}`;
   }
+  if (notice.kind === "MEETING_CANCELLED") return notice.venue + "の開催";
+  if (notice.kind === "RACE_CANCELLED") return notice.venue + " " + notice.raceNo + "R";
   return `${notice.horseNo ?? ""}番 ${notice.horseName ?? ""}`.trim();
 }
 
@@ -99,7 +107,10 @@ export function HomeScreen({ onOpenWeek, onOpenRace, active = true, cacheRevisio
     return todayRaces
       .filter((race) => {
         const start = raceStartEpoch(race);
-        return start != null && start > now;
+        return race.scheduleStatus === "ACTIVE" &&
+          race.raceStatus !== "CANCELLED" &&
+          race.raceStatus !== "ABANDONED" &&
+          start != null && start > now;
       })
       .sort((a,b) => (raceStartEpoch(a) ?? Infinity) - (raceStartEpoch(b) ?? Infinity))[0] ?? null;
   }, [todayRaces]);
@@ -175,9 +186,17 @@ export function HomeScreen({ onOpenWeek, onOpenRace, active = true, cacheRevisio
           </View>
           {notices.length ? notices.slice(0, 2).map((notice, index) => (
             <View key={notice.id} style={[styles.noticeRow, index > 0 && styles.borderTop]}>
-              <View style={[styles.noticeIcon, notice.kind === "SCRATCHED" || notice.kind === "EXCLUDED" ? styles.noticeIconDanger : null]}>
+              <View style={[styles.noticeIcon,
+                notice.kind === "SCRATCHED" || notice.kind === "EXCLUDED" ||
+                notice.kind === "MEETING_CANCELLED" || notice.kind === "RACE_CANCELLED"
+                  ? styles.noticeIconDanger : null]}>
                 <Text style={styles.noticeIconText}>
-                  {notice.kind === "TRACK_CHANGED" ? "馬" : notice.kind === "WEATHER_CHANGED" ? "天" : notice.kind === "START_TIME_CHANGED" ? "時" : "取"}
+                  {notice.kind === "TRACK_CHANGED" ? "馬"
+                    : notice.kind === "WEATHER_CHANGED" ? "天"
+                    : notice.kind === "START_TIME_CHANGED" ? "時"
+                    : notice.kind === "MEETING_RESCHEDULED" ? "順"
+                    : notice.kind === "MEETING_CANCELLED" || notice.kind === "RACE_CANCELLED" ? "中"
+                    : "取"}
                 </Text>
               </View>
               <View style={styles.flex1}>
