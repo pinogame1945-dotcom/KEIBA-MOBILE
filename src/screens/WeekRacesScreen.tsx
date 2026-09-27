@@ -139,7 +139,10 @@ export function WeekRacesScreen({
   const nextRaceKey = visible
     .filter((race) => {
       const start = raceStartEpoch(race);
-      return start != null && start > now;
+      return race.scheduleStatus === "ACTIVE" &&
+        race.raceStatus !== "CANCELLED" &&
+        race.raceStatus !== "ABANDONED" &&
+        start != null && start > now;
     })
     .sort((a,b) => (raceStartEpoch(a) ?? Infinity) - (raceStartEpoch(b) ?? Infinity))[0]?.raceKey ?? null;
 
@@ -254,10 +257,17 @@ export function WeekRacesScreen({
           const state = raceStateLabel(race, resultKeys.has(race.raceKey), now);
           const isNext = race.raceKey === nextRaceKey;
           const isPast = (raceStartEpoch(race) ?? Infinity) <= now;
+          const isDisrupted = race.scheduleStatus === "RESCHEDULED" ||
+            race.raceStatus === "CANCELLED" || race.raceStatus === "ABANDONED";
           return (
             <TouchableOpacity
               key={race.raceKey}
-              style={[styles.raceCard, isNext && styles.raceCardNext, isPast && !isNext && styles.raceCardPast]}
+              style={[
+                styles.raceCard,
+                isNext && styles.raceCardNext,
+                isPast && !isNext && !isDisrupted && styles.raceCardPast,
+                isDisrupted && styles.raceCardDisrupted,
+              ]}
               onPress={() => onOpenRace(race.raceKey)}
             >
               <View style={styles.raceNoBlock}>
@@ -317,6 +327,7 @@ const styles = StyleSheet.create({
   raceCard: { backgroundColor: "#fff", borderRadius: 18, padding: 15, flexDirection: "row", alignItems: "center", borderWidth: 1, borderColor: "transparent" },
   raceCardNext: { borderWidth: 2, borderColor: "#111827" },
   raceCardPast: { opacity: 0.55 },
+  raceCardDisrupted: { opacity: 0.72 },
   raceNoBlock: { width: 68, alignItems: "center" },
   raceNo: { fontSize: 20, fontWeight: "900", color: "#111827" },
   start: { marginTop: 3, color: "#6b7280", fontSize: 12, fontWeight: "700" },
