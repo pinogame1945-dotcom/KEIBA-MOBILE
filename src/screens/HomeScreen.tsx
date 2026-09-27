@@ -6,6 +6,7 @@ import { raceStartEpoch } from "../data/jra/oddsAvailability";
 import { raceCourseLabel } from "../ui/raceLabels";
 import { listRacingWeekRaces, listTodayNotices, localTodayIso } from "../repositories/liveRepository";
 import { refreshCurrentWeekRaceData } from "../services/raceRefreshService";
+import { refreshScheduleTarget } from "../services/scheduleTargetService";
 
 type Props = {
   onOpenWeek: () => void;
@@ -61,7 +62,9 @@ export function HomeScreen({ onOpenWeek, onOpenRace, active = true, cacheRevisio
     if (refreshing) return;
     setRefreshing(true);
     try {
-      await refreshCurrentWeekRaceData();
+      await refreshScheduleTarget(true);
+      await load();
+      await refreshCurrentWeekRaceData(undefined, load);
       await load();
     } catch {
       // Home stays usable from local cache even if JRA is temporarily unavailable.
