@@ -3,10 +3,10 @@ name: Build standalone release APK
 on:
   push:
     branches:
-      - feat/real-app-ui-v1
-      - main
+      - apk-build-trigger
     paths:
       - .github/apk-build-request.txt
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -19,6 +19,8 @@ jobs:
       CI: "1"
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
       - uses: actions/setup-node@v4
         with:
           node-version: "22.13.1"
