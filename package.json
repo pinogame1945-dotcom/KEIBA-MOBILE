@@ -20,7 +20,8 @@
     "smoke:netkeiba:result-condition": "node --experimental-strip-types scripts/netkeiba-result-condition-regression.ts",
     "expo:config:smoke": "expo config --type public --json > /dev/null",
     "android:smoke": "expo export --platform android --output-dir dist-android-smoke --clear",
-    "android:prebuild:smoke": "expo prebuild --platform android --no-install --clean"
+    "android:prebuild:smoke": "expo prebuild --platform android --no-install --clean",
+    "result-archive:contract": "node scripts/result-archive-contract.mjs"
   },
   "dependencies": {
     "cheerio": "1.0.0-rc.12",
