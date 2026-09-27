@@ -299,7 +299,7 @@ export async function saveOddsSnapshotRows(
   });
 }
 
-export async function getLatestOddsRows(raceKey: string, betType?: OddsBetType, limit = 500) {
+export async function getLatestOddsRows(raceKey: string, betType?: OddsBetType, limit = 10000) {
   const db = await getLiveDb();
   const where = betType ? "WHERE race_key=? AND bet_type=?" : "WHERE race_key=?";
   const args: Array<string | number> = betType ? [raceKey, betType, limit] : [raceKey, limit];
