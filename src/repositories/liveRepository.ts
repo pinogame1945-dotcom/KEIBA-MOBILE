@@ -323,17 +323,54 @@ export async function setWeekMeta(key: string, value: string) {
 
 export async function saveVenueConditionSnapshot(snapshot: VenueConditionSnapshot) {
   const db = await getLiveDb();
-  await db.runAsync(
-    `INSERT INTO venue_conditions(
-      race_date,venue,weather,turf_condition,dirt_condition,source_observed_label,source_observed_date,fetched_at,source_url
-    ) VALUES(?,?,?,?,?,?,?,?,?)
-    ON CONFLICT(race_date,venue) DO UPDATE SET
-      weather=excluded.weather,turf_condition=excluded.turf_condition,dirt_condition=excluded.dirt_condition,
-      source_observed_label=excluded.source_observed_label,source_observed_date=excluded.source_observed_date,
-      fetched_at=excluded.fetched_at,source_url=excluded.source_url`,
-    snapshot.raceDate,snapshot.venue,snapshot.weather,snapshot.turfCondition,snapshot.dirtCondition,
-    snapshot.sourceObservedLabel,snapshot.sourceObservedDate,snapshot.fetchedAt,snapshot.sourceUrl,
+  const previous = await db.getFirstAsync<{
+    weather: string | null;
+    turfCondition: string | null;
+    dirtCondition: string | null;
+    sourceObservedDate: string | null;
+  }>(
+    `SELECT weather,turf_condition AS turfCondition,dirt_condition AS dirtCondition,
+      source_observed_date AS sourceObservedDate
+     FROM venue_conditions WHERE race_date=? AND venue=?`,
+    snapshot.raceDate,snapshot.venue,
   );
+
+  const trackLabel = (turf: string | null, dirt: string | null) =>
+    [turf ? "芝 " + turf : null, dirt ? "ダ " + dirt : null].filter(Boolean).join(" / ") || null;
+  const currentSource = snapshot.sourceObservedDate === snapshot.raceDate;
+  const previousCurrent = previous?.sourceObservedDate === snapshot.raceDate;
+  const previousTrack = previous ? trackLabel(previous.turfCondition,previous.dirtCondition) : null;
+  const nextTrack = trackLabel(snapshot.turfCondition,snapshot.dirtCondition);
+
+  await db.withTransactionAsync(async () => {
+    if (previous && currentSource && previousCurrent) {
+      const venueRaceKey = "JRA-VENUE:" + snapshot.raceDate + ":" + snapshot.venue;
+      const addVenueNotice = async (kind: string, before: string | null, after: string | null) => {
+        if (!before || !after || before === after) return;
+        const eventKey = [venueRaceKey,kind,before,after].join("|");
+        await db.runAsync(
+          `INSERT OR IGNORE INTO notices(
+            event_key,race_key,race_date,venue,race_no,kind,horse_no,horse_name,previous_value,next_value,observed_at
+          ) VALUES(?,?,?,?,0,?,NULL,NULL,?,?,?)`,
+          eventKey,venueRaceKey,snapshot.raceDate,snapshot.venue,kind,before,after,snapshot.fetchedAt,
+        );
+      };
+      await addVenueNotice("WEATHER_CHANGED",previous.weather,snapshot.weather);
+      await addVenueNotice("TRACK_CHANGED",previousTrack,nextTrack);
+    }
+
+    await db.runAsync(
+      `INSERT INTO venue_conditions(
+        race_date,venue,weather,turf_condition,dirt_condition,source_observed_label,source_observed_date,fetched_at,source_url
+      ) VALUES(?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(race_date,venue) DO UPDATE SET
+        weather=excluded.weather,turf_condition=excluded.turf_condition,dirt_condition=excluded.dirt_condition,
+        source_observed_label=excluded.source_observed_label,source_observed_date=excluded.source_observed_date,
+        fetched_at=excluded.fetched_at,source_url=excluded.source_url`,
+      snapshot.raceDate,snapshot.venue,snapshot.weather,snapshot.turfCondition,snapshot.dirtCondition,
+      snapshot.sourceObservedLabel,snapshot.sourceObservedDate,snapshot.fetchedAt,snapshot.sourceUrl,
+    );
+  });
 }
 
 export async function getVenueConditionSnapshot(raceDate: string, venue: string) {
