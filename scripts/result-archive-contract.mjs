@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 const storage = readFileSync(new URL("../src/storage/liveDb.ts", import.meta.url), "utf8");
 const repository = readFileSync(new URL("../src/repositories/liveRepository.ts", import.meta.url), "utf8");
 const result = readFileSync(new URL("../src/services/resultService.ts", import.meta.url), "utf8");
+const sync = readFileSync(new URL("../src/services/liveSyncService.ts", import.meta.url), "utf8");
 
 for (const token of [
   "LIVE_SCHEMA_VERSION = 2",
