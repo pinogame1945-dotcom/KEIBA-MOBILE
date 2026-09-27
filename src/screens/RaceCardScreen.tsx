@@ -285,7 +285,11 @@ export function RaceCardScreen({
   ]);
 
   useEffect(() => {
-    if (!active || !race || race.status === "OFFICIAL" || busy || autoCardRepairRaceKey.current === race.raceKey) return;
+    if (
+      !active || !race || race.status === "OFFICIAL" || busy ||
+      race.scheduleStatus !== "ACTIVE" || race.raceStatus === "CANCELLED" || race.raceStatus === "ABANDONED" ||
+      autoCardRepairRaceKey.current === race.raceKey
+    ) return;
     autoCardRepairRaceKey.current = race.raceKey;
     setBusy("race");
     setError(null);
@@ -296,7 +300,10 @@ export function RaceCardScreen({
   }, [active, race, busy, load, onMutation]);
 
   useEffect(() => {
-    if (!active || !race || race.status !== "OFFICIAL" || !entries.length || autoOddsStarted.current) return;
+    if (
+      !active || !race || race.status !== "OFFICIAL" || !entries.length || autoOddsStarted.current ||
+      race.scheduleStatus !== "ACTIVE" || race.raceStatus === "CANCELLED" || race.raceStatus === "ABANDONED"
+    ) return;
     if (finalOddsConfirmedAt) return;
     const now = Date.now();
     const latestMs = latestObservedAt ? Date.parse(latestObservedAt) : 0;
@@ -312,7 +319,11 @@ export function RaceCardScreen({
   }, [active, race, entries, latestObservedAt, finalOddsConfirmedAt, load, onMutation]);
 
   useEffect(() => {
-    if (!active || raceTab !== "RESULT" || !race || results.length || busy || autoResultRaceKey.current === race.raceKey) return;
+    if (
+      !active || raceTab !== "RESULT" || !race || results.length || busy ||
+      race.scheduleStatus !== "ACTIVE" || race.raceStatus === "CANCELLED" || race.raceStatus === "ABANDONED" ||
+      autoResultRaceKey.current === race.raceKey
+    ) return;
     const start = raceStartEpoch(race);
     if (start != null && start > Date.now()) return;
     autoResultRaceKey.current = race.raceKey;
@@ -340,6 +351,10 @@ export function RaceCardScreen({
 
   const refreshCard = async () => {
     if (!race || busy) return;
+    if (race.scheduleStatus !== "ACTIVE" || race.raceStatus === "CANCELLED" || race.raceStatus === "ABANDONED") {
+      setError("この日程は順延・中止済みのため更新しない。");
+      return;
+    }
     setBusy("race"); setError(null);
     let cardError: unknown = null;
     try {
@@ -358,6 +373,10 @@ export function RaceCardScreen({
 
   const refreshOdds = async () => {
     if (!race || busy) return;
+    if (race.scheduleStatus !== "ACTIVE" || race.raceStatus === "CANCELLED" || race.raceStatus === "ABANDONED") {
+      setError("この日程ではオッズ更新を終了している。");
+      return;
+    }
     setBusy("odds"); setError(null);
     try {
       const result = await refreshLatestOdds(race, entries);
@@ -370,6 +389,10 @@ export function RaceCardScreen({
 
   const refreshResult = async () => {
     if (!race || busy) return;
+    if (race.scheduleStatus !== "ACTIVE" || race.raceStatus === "CANCELLED" || race.raceStatus === "ABANDONED") {
+      setError("この日程には結果を取りに行かない。");
+      return;
+    }
     setBusy("result"); setError(null);
     try {
       await refreshOfficialRaceResult(race);
@@ -430,6 +453,8 @@ export function RaceCardScreen({
   }
 
   const status = raceStateLabel(race, results.length > 0);
+  const disrupted = race.scheduleStatus !== "ACTIVE" ||
+    race.raceStatus === "CANCELLED" || race.raceStatus === "ABANDONED";
   const isFuture = (raceStartEpoch(race) ?? Infinity) > Date.now();
   const snapshotUsable = Boolean(
     venueSnapshot && (venueSnapshot.weather || venueSnapshot.turfCondition || venueSnapshot.dirtCondition),
@@ -539,7 +564,17 @@ export function RaceCardScreen({
               </View>
             </View>
 
-            {race.status !== "OFFICIAL" ? (
+            {disrupted ? (
+              <View style={styles.card}>
+                <Text style={styles.muted}>
+                  {race.scheduleStatus === "RESCHEDULED"
+                    ? "この日程は順延済み。新しい開催日を確認してください。"
+                    : race.raceStatus === "CANCELLED"
+                      ? "この開催は中止になっている。"
+                      : "この競走は取りやめになっている。"}
+                </Text>
+              </View>
+            ) : race.status !== "OFFICIAL" ? (
               <View style={styles.card}>
                 <Text style={styles.muted}>{
                   status === "データ修復中"
@@ -660,7 +695,7 @@ export function RaceCardScreen({
               <TouchableOpacity
                 style={styles.oddsStatusButton}
                 onPress={() => void refreshOdds()}
-                disabled={busy != null || race.status !== "OFFICIAL" || Boolean(finalOddsConfirmedAt)}
+                disabled={busy != null || disrupted || race.status !== "OFFICIAL" || Boolean(finalOddsConfirmedAt)}
               >
                 <Text style={styles.oddsStatusButtonText}>
                   {finalOddsConfirmedAt ? "✓ 確定" : busy === "odds" ? "取得中" : "↻ 更新"}
@@ -716,7 +751,13 @@ export function RaceCardScreen({
               </View>
             ) : (
               <View style={styles.card}>
-                <Text style={styles.muted}>{race.status === "OFFICIAL" ? "この条件のオッズはまだ取得していない。" : "正式出馬表の公開待ち。"}</Text>
+                <Text style={styles.muted}>{
+                  disrupted
+                    ? "この日程ではオッズ取得を終了している。"
+                    : race.status === "OFFICIAL"
+                      ? "この条件のオッズはまだ取得していない。"
+                      : "正式出馬表の公開待ち。"
+                }</Text>
               </View>
             )}
           </>
@@ -730,7 +771,7 @@ export function RaceCardScreen({
             <View style={styles.infoRow}><Text style={styles.infoKey}>天候</Text><Text style={styles.infoValue}>{displayWeather ?? conditionMissingText}</Text></View>
             <View style={styles.infoRow}><Text style={styles.infoKey}>馬場</Text><Text style={styles.infoValue}>{displayTrack ?? conditionMissingText}</Text></View>
             <View style={styles.infoRow}><Text style={styles.infoKey}>出走</Text><Text style={styles.infoValue}>{entries.filter((entry) => entry.entryStatus === "ACTIVE").length || "-"}頭</Text></View>
-            <TouchableOpacity style={styles.cardRefresh} onPress={() => void refreshCard()} disabled={busy != null}>
+            <TouchableOpacity style={[styles.cardRefresh, disrupted && styles.disabled]} onPress={() => void refreshCard()} disabled={busy != null || disrupted}>
               <Text style={styles.cardRefreshText}>{busy === "race" ? "更新中" : race.raceDate === localTodayIso() ? "出馬表・現在馬場を更新 ↻" : "出馬表を更新 ↻"}</Text>
             </TouchableOpacity>
           </View>
@@ -741,7 +782,7 @@ export function RaceCardScreen({
             <>
               <View style={styles.resultHeader}>
                 <Text style={styles.sectionTitle}>確定結果</Text>
-                <TouchableOpacity onPress={() => void refreshResult()} disabled={busy != null}>
+                <TouchableOpacity onPress={() => void refreshResult()} disabled={busy != null || disrupted}>
                   <Text style={styles.resultRefresh}>{busy === "result" ? "取得中" : "再取得 ↻"}</Text>
                 </TouchableOpacity>
               </View>
@@ -791,15 +832,21 @@ export function RaceCardScreen({
           ) : (
             <View style={styles.resultEmpty}>
               {busy === "result" ? <ActivityIndicator /> : null}
-              <Text style={styles.resultEmptyTitle}>{isFuture ? "結果はレース終了後に表示" : "確定結果を確認中"}</Text>
-              <Text style={styles.resultEmptySub}>
-                {isFuture
-                  ? race.discipline === "OBSTACLE"
-                    ? "確定後、着順・平均1F・払戻をここに表示する。"
-                    : "確定後、着順・上がり3F・払戻をここに表示する。"
-                  : "結果が公開済みなら取得して保存する。"}
+              <Text style={styles.resultEmptyTitle}>
+                {disrupted ? status : isFuture ? "結果はレース終了後に表示" : "確定結果を確認中"}
               </Text>
-              {!isFuture ? (
+              <Text style={styles.resultEmptySub}>
+                {disrupted
+                  ? race.scheduleStatus === "RESCHEDULED"
+                    ? "順延前の日程には結果を取りに行かない。"
+                    : "中止・取りやめのため結果取得は終了している。"
+                  : isFuture
+                    ? race.discipline === "OBSTACLE"
+                      ? "確定後、着順・平均1F・払戻をここに表示する。"
+                      : "確定後、着順・上がり3F・払戻をここに表示する。"
+                    : "結果が公開済みなら取得して保存する。"}
+              </Text>
+              {!isFuture && !disrupted ? (
                 <TouchableOpacity style={styles.resultButton} onPress={() => void refreshResult()} disabled={busy != null}>
                   <Text style={styles.resultButtonText}>{busy === "result" ? "取得中" : "結果を取得 ↻"}</Text>
                 </TouchableOpacity>
