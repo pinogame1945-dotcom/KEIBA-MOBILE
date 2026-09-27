@@ -18,6 +18,7 @@ export type RaceFetchStats = {
   done: number;
   failed: number;
 };
+export type RaceFetchRunState = "RUNNING" | "COMPLETED" | "PARTIAL" | "FAILED";
 
 async function statsFromDb(): Promise<RaceFetchStats> {
   const db = await getLiveDb();
@@ -52,7 +53,7 @@ export async function prepareRaceFetchRun(targetFingerprint: string) {
   ]);
   const sameTarget = target?.value === targetFingerprint;
   const resume = sameTarget && stats.total > 0 && (
-    state?.value === "RUNNING" || state?.value === "FAILED" ||
+    state?.value === "RUNNING" || state?.value === "FAILED" || state?.value === "PARTIAL" ||
     stats.pending > 0 || stats.fetching > 0 || stats.retry > 0
   );
 
@@ -178,23 +179,23 @@ export async function findRaceFetchUrl(raceDate: string, venue: string, raceNo: 
   );
 }
 
-export async function finishRaceFetchRun(ok: boolean, error?: string | null) {
+export async function finishRaceFetchRun(state: RaceFetchRunState, error?: string | null) {
   const db = await getLiveDb();
   await db.withTransactionAsync(async () => {
     await db.runAsync(
       "INSERT INTO meta(key,value) VALUES('race_fetch_state',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-      ok ? "COMPLETED" : "FAILED",
+      state,
     );
-    if (ok) {
+    if (state === "COMPLETED") {
       await db.runAsync(
         "INSERT INTO meta(key,value) VALUES('race_fetch_completed_at',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         new Date().toISOString(),
       );
       await db.runAsync("DELETE FROM meta WHERE key='race_fetch_error'");
-    } else {
+    } else if (error) {
       await db.runAsync(
         "INSERT INTO meta(key,value) VALUES('race_fetch_error',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        (error ?? "JRA正式出馬表取得に失敗").slice(0, 500),
+        error.slice(0, 500),
       );
     }
   });
