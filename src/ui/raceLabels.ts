@@ -25,8 +25,19 @@ export function raceCourseLabel(race: JraRace) {
   ].filter(Boolean).join(" ");
 }
 
+function shortDate(iso: string | null) {
+  if (!iso) return null;
+  const [,m,d] = iso.split("-");
+  return m && d ? Number(m) + "/" + Number(d) : iso;
+}
+
 export function raceStateLabel(race: JraRace, hasResult: boolean, nowMs = Date.now()) {
-  if (hasResult) return "結果確定";
+  if (race.scheduleStatus === "RESCHEDULED") {
+    return race.actualDate ? "順延 → " + shortDate(race.actualDate) : "順延";
+  }
+  if (race.raceStatus === "CANCELLED") return "開催中止";
+  if (race.raceStatus === "ABANDONED") return "競走取りやめ";
+  if (hasResult || race.raceStatus === "COMPLETED") return "結果確定";
   const [y,m,d] = race.raceDate.split("-").map(Number);
   const [hh,mm] = (race.startTime ?? "").split(":").map(Number);
   const start = Number.isFinite(hh) && Number.isFinite(mm)

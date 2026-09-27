@@ -1,6 +1,6 @@
 import type { ScheduleTarget } from "../domain/live";
 import { fetchJraHtml } from "../data/jra/http";
-import { calendarDayUrl,parseCalendarDay,scheduleTargetFingerprint } from "../data/jra/scheduleParser";
+import { calendarDayUrl,parseCalendarDay,parseCalendarDisruptions,scheduleTargetFingerprint } from "../data/jra/scheduleParser";
 import { getScheduleTarget,localTodayIso,saveScheduleTarget } from "../repositories/liveRepository";
 
 const FRESH_MS=30*60*1000;
@@ -38,16 +38,23 @@ export async function refreshScheduleTarget(force=false):Promise<ScheduleTarget>
     for(let offset=0;offset<=10;offset+=1)probeDates.push(shiftDate(today,offset));
   }
 
-  const parsedByDate=new Map<string,{url:string;meetings:ScheduleTarget["meetings"]}>();
+  const parsedByDate=new Map<string,{url:string;meetings:ScheduleTarget["meetings"];disruptions:ScheduleTarget["disruptions"]}>();
   let firstFutureDate:string|null=null;
   for(const date of [...new Set(probeDates)].sort()){
     if((!cachedLatest||cachedLatest<today)&&firstFutureDate&&date>=today&&dayDistance(firstFutureDate,date)>3)break;
     const url=calendarDayUrl(date);
     try{
-      const meetings=parseCalendarDay(await fetchJraHtml(url),url);
-      if(!meetings.length)continue;
-      parsedByDate.set(date,{url,meetings});
-      if(date>=today&&firstFutureDate==null)firstFutureDate=date;
+      const html=await fetchJraHtml(url);
+      const disruptions=parseCalendarDisruptions(html,url);
+      let meetings:ScheduleTarget["meetings"]=[];
+      try{
+        meetings=parseCalendarDay(html,url);
+      }catch{
+        // A fully cancelled page can legitimately contain no normal race table.
+      }
+      if(!meetings.length&&!disruptions.length)continue;
+      parsedByDate.set(date,{url,meetings,disruptions});
+      if(date>=today&&firstFutureDate==null&&(meetings.length||disruptions.length))firstFutureDate=date;
     }catch{
       // Missing calendar pages never erase a verified cached target.
     }
@@ -73,14 +80,19 @@ export async function refreshScheduleTarget(force=false):Promise<ScheduleTarget>
     if(yesterdayIsRace&&dayDistance(yesterday,first)<=1)selectedDates=[yesterday,...selectedDates];
   }
 
-  const meetings:ScheduleTarget["meetings"]=[],sourceUrls:string[]=[];
+  const meetings:ScheduleTarget["meetings"]=[],disruptions:ScheduleTarget["disruptions"]=[],sourceUrls:string[]=[];
   for(const date of [...new Set(selectedDates)].sort()){
     const parsed=parsedByDate.get(date);
     if(parsed){
-      meetings.push(...parsed.meetings);
+      const parsedMeetings=parsed.meetings.length
+        ? parsed.meetings
+        : cached?.meetings.filter(meeting=>meeting.raceDate===date) ?? [];
+      meetings.push(...parsedMeetings);
+      disruptions.push(...parsed.disruptions);
       sourceUrls.push(parsed.url);
     }else if(cached){
       meetings.push(...cached.meetings.filter(meeting=>meeting.raceDate===date));
+      disruptions.push(...((cached.disruptions ?? []).filter(item=>item.raceDate===date)));
       sourceUrls.push(calendarDayUrl(date));
     }
   }
@@ -93,6 +105,7 @@ export async function refreshScheduleTarget(force=false):Promise<ScheduleTarget>
     fetchedAt:new Date().toISOString(),
     dates:[...new Set(meetings.map(meeting=>meeting.raceDate))].sort(),
     meetings,
+    disruptions,
     sourceUrls:[...new Set(sourceUrls)],
     fingerprint:"",
   };

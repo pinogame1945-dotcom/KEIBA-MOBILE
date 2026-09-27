@@ -1,5 +1,5 @@
 import { load } from "cheerio";
-import type { ScheduleMeeting, ScheduleRace } from "../../domain/live";
+import type { ScheduleDisruption, ScheduleMeeting, ScheduleRace } from "../../domain/live";
 
 const VENUES = ["札幌","函館","福島","新潟","東京","中山","中京","京都","阪神","小倉"];
 
@@ -44,6 +44,44 @@ function normalizeRaceName(description: string) {
   const after = clean(description.slice((distance.index ?? 0) + distance[0].length));
   const qualifier = after.match(/（[^）]+）/)?.[0] ?? "";
   return clean([before, qualifier].filter(Boolean).join(" ")) || null;
+}
+
+export function parseCalendarDisruptions(html: string, sourceUrl: string): ScheduleDisruption[] {
+  const raceDate = dateFromDayUrl(sourceUrl);
+  if (!raceDate) throw new Error("JRA開催日程URLの日付を解析できない");
+  const $ = load(html);
+  const text = clean($.root().text());
+  const disruptions: ScheduleDisruption[] = [];
+  const seen = new Set<string>();
+
+  const add = (row: ScheduleDisruption) => {
+    const key = [row.raceDate,row.venue,row.scope,row.raceNo ?? "",row.kind].join("|");
+    if (seen.has(key)) return;
+    seen.add(key);
+    disruptions.push(row);
+  };
+
+  for (const venue of VENUES) {
+    const meetingPatterns = [
+      new RegExp(venue + "(?:競馬)?[^。]{0,100}(?:開催を(?:中止|取りやめ)|開催中止|開催取りやめ)"),
+      new RegExp("(?:開催を(?:中止|取りやめ)|開催中止|開催取りやめ)[^。]{0,100}" + venue + "(?:競馬)?"),
+    ];
+    if (meetingPatterns.some((pattern) => pattern.test(text))) {
+      add({ raceDate, venue, scope:"MEETING", raceNo:null, kind:"CANCELLED", sourceUrl });
+    }
+
+    const racePattern = new RegExp(
+      venue + "(?:競馬)?[^。]{0,120}?(?:第)?(\\d{1,2})(?:競走|レース|R)[^。]{0,80}?(?:(?:競走|レース)(?:の|を)?取りやめ|(?:競走|レース)(?:の|を)?中止|(?:の|を)取りやめ)",
+      "g",
+    );
+    for (const match of text.matchAll(racePattern)) {
+      const raceNo = Number(match[1]);
+      if (Number.isFinite(raceNo) && raceNo >= 1 && raceNo <= 12) {
+        add({ raceDate, venue, scope:"RACE", raceNo, kind:"ABANDONED", sourceUrl });
+      }
+    }
+  }
+  return disruptions;
 }
 
 export function calendarDayUrl(iso: string) {
@@ -102,11 +140,13 @@ export function parseCalendarDay(html: string, sourceUrl: string): ScheduleMeeti
 }
 
 
-export function scheduleTargetFingerprint(target: { meetings: ScheduleMeeting[] }) {
-  return target.meetings
+export function scheduleTargetFingerprint(target: { meetings: ScheduleMeeting[]; disruptions?: ScheduleDisruption[] }) {
+  const races = target.meetings
     .flatMap((meeting) => meeting.races.map((race) =>
       [race.raceDate,race.venue,meeting.meetingNo,meeting.meetingDay,race.raceNo].join("|")
-    ))
-    .sort()
-    .join(",");
+    ));
+  const disruptions = (target.disruptions ?? []).map((item) =>
+    ["DISRUPTION",item.raceDate,item.venue,item.scope,item.raceNo ?? "",item.kind].join("|")
+  );
+  return [...races,...disruptions].sort().join(",");
 }

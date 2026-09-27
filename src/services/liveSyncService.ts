@@ -60,6 +60,7 @@ async function refreshIncompleteResults(onMutation?:()=>void){
   const now=Date.now();
   const candidates=races
     .filter(race=>race.canonicalRaceId)
+    .filter(race=>race.scheduleStatus==="ACTIVE"&&race.raceStatus!=="CANCELLED"&&race.raceStatus!=="ABANDONED")
     .filter(race=>{
       const start=raceStartEpoch(race);
       return start!=null&&start+15*60*1000<=now;
@@ -82,6 +83,7 @@ async function refreshIncompletePayouts(){
   const now=Date.now();
   const candidates=races
     .filter(race=>race.canonicalRaceId)
+    .filter(race=>race.scheduleStatus==="ACTIVE"&&race.raceStatus!=="CANCELLED"&&race.raceStatus!=="ABANDONED")
     .filter(race=>{
       const start=raceStartEpoch(race);
       return start!=null&&start+15*60*1000<=now;
@@ -104,7 +106,10 @@ async function refreshDueOdds(){
   const races=await listRacingWeekRaces();
   const now=Date.now(),today=localTodayIso();
   const candidates=races
-    .filter(race=>race.raceDate===today&&race.status==="OFFICIAL")
+    .filter(race=>
+      race.raceDate===today&&race.status==="OFFICIAL"&&race.scheduleStatus==="ACTIVE"&&
+      race.raceStatus!=="CANCELLED"&&race.raceStatus!=="ABANDONED"
+    )
     .map(race=>({race,start:raceStartEpoch(race)}))
     .filter((item):item is {race:typeof races[number];start:number}=>
       item.start!=null&&item.start-now<=3*60*60*1000
@@ -156,6 +161,7 @@ export function warmRaceData(raceKey:string,onMutation?:()=>void){
   const job=(async()=>{
     let race=await getRace(raceKey);
     if(!race)return;
+    if(race.scheduleStatus!=="ACTIVE"||race.raceStatus==="CANCELLED"||race.raceStatus==="ABANDONED")return;
     const start=raceStartEpoch(race);
     const now=Date.now();
 
