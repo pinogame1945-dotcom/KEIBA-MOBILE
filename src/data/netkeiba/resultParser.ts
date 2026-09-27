@@ -131,6 +131,19 @@ function parseConditions(meta: string, race: JraRace): OfficialRaceConditions {
   };
 }
 
+function mergeConditions(race:JraRace,...sources:string[]):OfficialRaceConditions{
+  let weather:string|null=null,turfCondition:string|null=null,dirtCondition:string|null=null;
+  for(const source of sources){
+    if(!source)continue;
+    const parsed=parseConditions(source,race);
+    weather??=parsed.weather;
+    turfCondition??=parsed.turfCondition;
+    dirtCondition??=parsed.dirtCondition;
+    if(weather&&turfCondition&&dirtCondition)break;
+  }
+  return {weather,turfCondition,dirtCondition};
+}
+
 export function parseNetkeibaRaceResultPage(html: string, race: JraRace) {
   const $ = load(html);
   const pageText = clean($.root().text());
@@ -142,11 +155,9 @@ export function parseNetkeibaRaceResultPage(html: string, race: JraRace) {
 
   const liveMeta = [clean($(".RaceData01").first().text()),clean($(".RaceData02").first().text())]
     .filter(Boolean).join(" ");
-  const meta = $(".data_intro").first().length
-    ? clean($(".data_intro").first().text())
-    : $(".race_head").first().length
-      ? clean($(".race_head").first().text())
-      : liveMeta || pageText;
+  const introMeta = clean($(".data_intro").first().text());
+  const raceHeadMeta = clean($(".race_head").first().text());
+  const meta = introMeta || raceHeadMeta || liveMeta || pageText;
 
   let table = $("table.race_table_01").first();
   if (!table.length) table = $("table.RaceTable01").first();
@@ -244,5 +255,9 @@ export function parseNetkeibaRaceResultPage(html: string, race: JraRace) {
     }
   });
 
-  return { results, payouts, conditions: parseConditions(meta, race) };
+  return {
+    results,
+    payouts,
+    conditions: mergeConditions(race,meta,liveMeta,introMeta,raceHeadMeta,pageText),
+  };
 }

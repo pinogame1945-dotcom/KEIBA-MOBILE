@@ -189,7 +189,7 @@ export function warmRaceData(raceKey:string,onMutation?:()=>void){
       if(race.status!=="OFFICIAL"){
         repairs.push(refreshRaceState(race).then(()=>onMutation?.()));
       }
-      if(!completeness.resultReady){
+      if(!completeness.resultReady||!completeness.conditionsComplete){
         repairs.push(refreshOfficialRaceResult(race).then(()=>onMutation?.()));
       }
       await Promise.allSettled(repairs);
