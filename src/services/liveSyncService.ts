@@ -33,7 +33,11 @@ async function refreshWeekIfDue() {
   const now = Date.now();
   const scheduled = races.some((race) => race.status === "SCHEDULED");
   const lastAttempt = parsedTime(await getWeekMeta(WEEK_ATTEMPT_META));
-  const interval = scheduled || !races.length ? 2 * 60 * 1000 : 15 * 60 * 1000;
+  const interval = !races.length
+    ? 5 * 60 * 1000
+    : scheduled
+      ? 15 * 60 * 1000
+      : 30 * 60 * 1000;
   if (lastAttempt && now - lastAttempt < interval) return;
 
   await setWeekMeta(WEEK_ATTEMPT_META, new Date(now).toISOString());

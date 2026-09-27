@@ -43,14 +43,10 @@ export default function App() {
   }, [runSync]);
 
   const goBack = useCallback(() => {
-    let handled = false;
-    setStack((prev) => {
-      if (prev.length <= 1) return prev;
-      handled = true;
-      return prev.slice(0, -1);
-    });
-    return handled;
-  }, []);
+    if (stack.length <= 1) return false;
+    setStack((prev) => prev.length > 1 ? prev.slice(0, -1) : prev);
+    return true;
+  }, [stack.length]);
 
   useEffect(() => {
     const subscription = BackHandler.addEventListener("hardwareBackPress", goBack);
@@ -90,7 +86,11 @@ export default function App() {
           {stack.map((route, index) => {
             const active = index === stack.length - 1;
             return (
-              <View key={route.id} style={[styles.screen, !active && styles.hidden]}>
+              <View
+                key={route.id}
+                pointerEvents={active ? "auto" : "none"}
+                style={[styles.screen, active ? styles.activeScreen : styles.hidden]}
+              >
                 {route.type === "HOME" ? (
                   <HomeScreen
                     active={active}
@@ -131,7 +131,8 @@ export default function App() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#f4f6f8" },
-  content: { flex: 1 },
-  screen: { flex: 1 },
-  hidden: { display: "none" },
+  content: { flex: 1, position: "relative" },
+  screen: { ...StyleSheet.absoluteFillObject },
+  activeScreen: { opacity: 1, zIndex: 1 },
+  hidden: { opacity: 0, zIndex: 0 },
 });

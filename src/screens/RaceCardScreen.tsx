@@ -11,7 +11,9 @@ import {
   getRace, getRacePayouts, getRaceResults, getWeekEntries, listRacesForDates,
 } from "../repositories/liveRepository";
 import { refreshRaceState } from "../services/raceRefreshService";
-import { loadOdds, oddsBetTypeLabel, refreshLatestOdds } from "../services/oddsService";
+import {
+  loadLatestWinOdds,loadOddsMeta,loadOddsRows,oddsBetTypeLabel,refreshLatestOdds,
+} from "../services/oddsService";
 import { refreshOfficialRaceResult } from "../services/resultService";
 import { raceCourseLabel, raceStateLabel } from "../ui/raceLabels";
 
@@ -54,10 +56,6 @@ function formatOdds(row: OddsRow) {
   if (row.odds != null) return row.odds.toFixed(1);
   if (row.oddsMin != null && row.oddsMax != null) return row.oddsMin.toFixed(1) + "〜" + row.oddsMax.toFixed(1);
   return "-";
-}
-
-function oddsSortValue(row: OddsRow) {
-  return row.odds ?? row.oddsMin ?? Number.POSITIVE_INFINITY;
 }
 
 function formatClock(iso: string | null) {
@@ -153,6 +151,8 @@ export function RaceCardScreen({
   const [entries, setEntries] = useState<JraEntry[]>([]);
   const [dayRaces, setDayRaces] = useState<JraRace[]>([]);
   const [odds, setOdds] = useState<OddsRow[]>([]);
+  const [availableTypes, setAvailableTypes] = useState<OddsBetType[]>([]);
+  const [latestWinByNo, setLatestWinByNo] = useState<Map<number, number>>(() => new Map());
   const [latestObservedAt, setLatestObservedAt] = useState<string | null>(null);
   const [results, setResults] = useState<JraRaceResult[]>([]);
   const [payouts, setPayouts] = useState<JraPayout[]>([]);
@@ -174,28 +174,36 @@ export function RaceCardScreen({
       setRace(null);
       return;
     }
-    const [nextEntries, nextOdds, nextResults, nextPayouts, sameDay] = await Promise.all([
+    const [nextEntries, oddsMeta, winOdds, nextResults, nextPayouts, sameDay] = await Promise.all([
       getWeekEntries(raceKey),
-      loadOdds(raceKey),
+      loadOddsMeta(raceKey),
+      loadLatestWinOdds(raceKey),
       getRaceResults(raceKey),
       getRacePayouts(raceKey),
       listRacesForDates([nextRace.raceDate]),
     ]);
     setRace(nextRace);
     setEntries(nextEntries);
-    setOdds(nextOdds.rows);
-    setLatestObservedAt(nextOdds.latestObservedAt);
+    setAvailableTypes(oddsMeta.availableTypes);
+    setLatestObservedAt(oddsMeta.latestObservedAt);
+    setLatestWinByNo(new Map(
+      winOdds
+        .filter((row): row is { horseNo: number; odds: number } => row.odds != null)
+        .map((row) => [row.horseNo, row.odds]),
+    ));
     setResults(nextResults);
     setPayouts(nextPayouts);
     setDayRaces(sameDay.filter((item) => item.venue === nextRace.venue).sort((a,b) => a.raceNo - b.raceNo));
-    if (!nextOdds.availableTypes.includes(selectedType) && nextOdds.availableTypes.length) {
-      setSelectedType(nextOdds.availableTypes[0]);
-    }
-    if (selectedHorseNo == null) {
-      const firstActive = nextEntries.find((entry) => entry.entryStatus === "ACTIVE" && entry.horseNo != null);
-      if (firstActive?.horseNo != null) setSelectedHorseNo(firstActive.horseNo);
-    }
-  }, [raceKey, selectedHorseNo, selectedType]);
+    setSelectedType((current) =>
+      oddsMeta.availableTypes.includes(current) || !oddsMeta.availableTypes.length
+        ? current
+        : oddsMeta.availableTypes[0]
+    );
+    setSelectedHorseNo((current) => {
+      if (current != null) return current;
+      return nextEntries.find((entry) => entry.entryStatus === "ACTIVE" && entry.horseNo != null)?.horseNo ?? null;
+    });
+  }, [raceKey]);
 
   useEffect(() => {
     autoOddsStarted.current = false;
@@ -220,6 +228,28 @@ export function RaceCardScreen({
   }, [active]);
 
   useEffect(() => {
+    if (!active || raceTab !== "ODDS") return;
+    const selectedHorse = entries.find((entry) => entry.horseNo === selectedHorseNo) ?? null;
+    const selection = oddsView === "HORSE"
+      ? selectedType === "BRACKET_QUINELLA"
+        ? selectedHorse?.gate ?? null
+        : selectedHorse?.horseNo ?? null
+      : null;
+    if (oddsView === "HORSE" && selection == null) {
+      setOdds([]);
+      return;
+    }
+    let cancelled = false;
+    void loadOddsRows(raceKey, selectedType, selection, 120)
+      .then((rows) => { if (!cancelled) setOdds(rows); })
+      .catch(() => { if (!cancelled) setOdds([]); });
+    return () => { cancelled = true; };
+  }, [
+    active,cacheRevision,raceKey,raceTab,selectedType,oddsView,selectedHorseNo,
+    entries,latestObservedAt,
+  ]);
+
+  useEffect(() => {
     if (!active || !race || race.status !== "OFFICIAL" || !entries.length || autoOddsStarted.current) return;
     const start = raceStartEpoch(race);
     if (start != null && start <= Date.now()) return;
@@ -242,38 +272,15 @@ export function RaceCardScreen({
       .finally(() => setBusy(null));
   }, [raceTab, race, results.length, busy, load]);
 
-  const latestWinByNo = useMemo(() => {
-    const map = new Map<number, number>();
-    for (const row of odds) {
-      if (row.betType === "WIN" && row.selection1 != null && row.odds != null) map.set(row.selection1, row.odds);
-    }
-    return map;
-  }, [odds]);
-
   const sortedEntries = useMemo(() => [...entries].sort((a,b) => {
     if (sortMode === "POPULARITY") return (a.popularity ?? 999) - (b.popularity ?? 999);
     return (a.horseNo ?? 999) - (b.horseNo ?? 999);
   }), [entries, sortMode]);
 
-  const availableTypes = useMemo(
-    () => TYPE_ORDER.filter((type) => odds.some((row) => row.betType === type)),
-    [odds],
-  );
-
   const selectedHorse = entries.find((entry) => entry.horseNo === selectedHorseNo) ?? null;
   const detailHorse = entries.find((entry) => entry.horseNo === detailHorseNo) ?? null;
 
-  const displayedOdds = useMemo(() => {
-    let rows = odds.filter((row) => row.betType === selectedType);
-    if (oddsView === "HORSE" && selectedHorse) {
-      const target = selectedType === "BRACKET_QUINELLA" ? selectedHorse.gate : selectedHorse.horseNo;
-      rows = rows.filter((row) =>
-        target != null && [row.selection1,row.selection2,row.selection3].some((value) => value === target)
-      );
-      rows = [...rows].sort((a,b) => oddsSortValue(a) - oddsSortValue(b));
-    }
-    return rows;
-  }, [odds, selectedType, oddsView, selectedHorse]);
+  const displayedOdds = odds;
 
   const currentIndex = dayRaces.findIndex((item) => item.raceKey === raceKey);
   const previousRace = currentIndex > 0 ? dayRaces[currentIndex - 1] : null;

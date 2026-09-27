@@ -4,13 +4,15 @@ on:
   push:
     branches:
       - feat/real-app-ui-v1
+      - main
+    paths:
+      - .github/apk-build-request.txt
 
 permissions:
   contents: read
 
 jobs:
   build-apk:
-    if: github.event.head_commit.message == 'Build standalone release APK'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
