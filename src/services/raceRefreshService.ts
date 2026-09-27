@@ -190,12 +190,14 @@ export function refreshCurrentWeekRaceData(
     await prepareRaceFetchRun(target.fingerprint);
     try{
       let stats=await getRaceFetchStats();
-      if(stats.total===0){
+      const actionable=stats.pending+stats.fetching+stats.retry+stats.failed;
+      if(stats.total===0||actionable===0){
         const seeds=await discoverSeeds(target.meetings,onProgress);
         for(const url of seeds){
           await enqueueRaceFetchUrl({url,targetFingerprint:target.fingerprint,...metadata(url)});
         }
-        if(!seeds.length){
+        stats=await getRaceFetchStats();
+        if(!seeds.length&&stats.pending+stats.retry+stats.fetching===0){
           await finishRaceFetchRun("PARTIAL","正式出馬表入口をまだ発見できない");
           return {meetings:target.meetings.length,officialSaved:0,pendingMeetings:target.meetings.length};
         }
@@ -208,23 +210,32 @@ export function refreshCurrentWeekRaceData(
       for(const meeting of target.meetings){
         const key=meetingKey(meeting.venue,meeting.meetingNo,meeting.meetingDay);
         const expected=authoritativeRaceNos(meeting,discovery.navigation);
+        if(!expected?.length){
+          pendingMeetings+=1;
+          continue;
+        }
+
         const group=discovery.cards.get(key)??new Map<number,JraRaceCard>();
-        if(!expected?.length||!expected.every(no=>group.has(no))){
-          pendingMeetings+=1;
-          continue;
+        const cards=expected
+          .map(no=>group.get(no))
+          .filter((card):card is JraRaceCard=>Boolean(card));
+        if(cards.length===expected.length){
+          try{
+            await saveOfficialMeeting(cards,expected);
+            officialSaved+=cards.length;
+            await onMutation?.();
+            continue;
+          }catch(error){
+            console.warn("Verified JRA meeting atomic save deferred",key,error);
+          }
         }
-        const cards=expected.map(no=>group.get(no)!).filter(Boolean);
-        if(cards.length!==expected.length){
+
+        const persisted=(await listOfficialRacesForDates([meeting.raceDate]))
+          .filter(race=>race.venue===meeting.venue)
+          .map(race=>race.raceNo)
+          .sort((a,b)=>a-b);
+        if(signature(persisted)!==signature(expected)){
           pendingMeetings+=1;
-          continue;
-        }
-        try{
-          await saveOfficialMeeting(cards,expected);
-          officialSaved+=cards.length;
-          await onMutation?.();
-        }catch(error){
-          pendingMeetings+=1;
-          console.warn("Verified JRA meeting save deferred",key,error);
         }
       }
 
