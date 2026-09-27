@@ -60,7 +60,7 @@ export function WeekRacesScreen({
     try {
       await refreshScheduleTarget(true);
       await load();
-      await refreshCurrentWeekRaceData(setProgress, load);
+      await refreshCurrentWeekRaceData(setProgress, async () => { await load(); });
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
