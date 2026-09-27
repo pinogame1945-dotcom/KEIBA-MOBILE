@@ -30,6 +30,13 @@ function dateLabel(iso: string) {
   return `${m}/${d}(${WEEKDAY[date.getDay()]})`;
 }
 
+function localClock(iso: string | null) {
+  if (!iso) return null;
+  const date = new Date(iso);
+  if (!Number.isFinite(date.getTime())) return null;
+  return String(date.getHours()).padStart(2, "0") + ":" + String(date.getMinutes()).padStart(2, "0");
+}
+
 export function WeekRacesScreen({
   onOpenRace,
   onBack,
@@ -217,7 +224,7 @@ export function WeekRacesScreen({
               </Text>
             </View>
             <Text style={styles.updated}>
-              {venueUpdatedAt ? "馬場取得 " + venueUpdatedAt.slice(11,16) : "馬場取得時刻なし"}
+              {localClock(venueUpdatedAt) ? "馬場取得 " + localClock(venueUpdatedAt) : "馬場取得時刻なし"}
             </Text>
           </View>
         ) : null}
