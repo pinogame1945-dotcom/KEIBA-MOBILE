@@ -10,7 +10,10 @@ export function markOfficialNumberedRaceCard(html:string,card:JraRaceCard):JraRa
   }
   const explicit=extractOfficialEntryRows(html);
   if(!explicit.length)throw new Error("HTML上で番号付き出走馬を確認できない");
-  if(explicit.some(row=>!row.explicitGate||!row.explicitHorseNo)){
+  if(explicit.some(row=>
+    (!row.explicitGate||!row.explicitHorseNo) &&
+    !(/(?:取消|除外)/.test(row.rowText)&&row.horseNo!=null&&row.gate!=null)
+  )){
     throw new Error("HTML上の正式馬番・枠番が欠けた出走馬がある");
   }
   if(card.entries.length!==explicit.length)throw new Error("HTML出走馬数と解析出走馬数が一致しない");
