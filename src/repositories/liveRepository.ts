@@ -3,7 +3,7 @@ import type {
   ScheduleTarget, VenueConditionSnapshot,
 } from "../domain/live";
 import { canonicalRaceIdFromSchedule } from "../data/jra/raceHeaderParser";
-import { getLiveDb } from "../storage/liveDb";
+import { getLiveDb, withLiveDbTransaction, withLiveDbWrite } from "../storage/liveDb";
 
 export type JraOddsBetType = OddsBetType;
 export type OddsActionCache = { betType: OddsBetType; path: string; cname: string; updatedAt: string; };
@@ -182,8 +182,7 @@ export async function saveOfficialMeeting(cards: JraRaceCard[], authoritativeRac
   const expected = [...new Set(authoritativeRaceNos)].sort((a,b) => a-b);
   const actual = [...new Set(cards.map((c) => c.race.raceNo))].sort((a,b) => a-b);
   if (expected.join(",") !== actual.join(",")) throw new Error("正式ナビ集合と保存対象レース集合が一致しない");
-  const db = await getLiveDb();
-  await db.withTransactionAsync(async () => {
+  await withLiveDbTransaction(async (db) => {
     const existing = await db.getAllAsync<{ race_no: number }>(
       "SELECT race_no FROM races WHERE race_date=? AND venue=? AND status='OFFICIAL' ORDER BY race_no",
       first.raceDate, first.venue,
@@ -195,8 +194,7 @@ export async function saveOfficialMeeting(cards: JraRaceCard[], authoritativeRac
 }
 
 export async function saveOfficialCard(card: JraRaceCard) {
-  const db = await getLiveDb();
-  await db.withTransactionAsync(async () => { await writeOfficialCard(db, card); });
+  await withLiveDbTransaction(async (db) => { await writeOfficialCard(db, card); });
 }
 
 function raceSelect() {
@@ -316,13 +314,31 @@ export async function getWeekMeta(key: string) {
   return row?.value ?? null;
 }
 export async function setWeekMeta(key: string, value: string) {
-  const db = await getLiveDb();
-  await db.runAsync("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, value);
+  await withLiveDbWrite(async (db) => {
+    await db.runAsync("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, value);
+  });
+}
+
+
+const FINAL_ODDS_META_PREFIX = "odds_final_confirmed:";
+const FINAL_ODDS_PROBE_META_PREFIX = "odds_final_probe:";
+
+export function getFinalOddsConfirmedAt(raceKey: string) {
+  return getWeekMeta(FINAL_ODDS_META_PREFIX + raceKey);
+}
+export function markFinalOddsConfirmed(raceKey: string, observedAt: string) {
+  return setWeekMeta(FINAL_ODDS_META_PREFIX + raceKey, observedAt);
+}
+export function getFinalOddsProbeAt(raceKey: string) {
+  return getWeekMeta(FINAL_ODDS_PROBE_META_PREFIX + raceKey);
+}
+export function markFinalOddsProbe(raceKey: string, observedAt: string) {
+  return setWeekMeta(FINAL_ODDS_PROBE_META_PREFIX + raceKey, observedAt);
 }
 
 
 export async function saveVenueConditionSnapshot(snapshot: VenueConditionSnapshot) {
-  const db = await getLiveDb();
+  await withLiveDbTransaction(async (db) => {
   const previous = await db.getFirstAsync<{
     weather: string | null;
     turfCondition: string | null;
@@ -342,7 +358,6 @@ export async function saveVenueConditionSnapshot(snapshot: VenueConditionSnapsho
   const previousTrack = previous ? trackLabel(previous.turfCondition,previous.dirtCondition) : null;
   const nextTrack = trackLabel(snapshot.turfCondition,snapshot.dirtCondition);
 
-  await db.withTransactionAsync(async () => {
     if (previous && currentSource && previousCurrent) {
       const venueRaceKey = "JRA-VENUE:" + snapshot.raceDate + ":" + snapshot.venue;
       const addVenueNotice = async (kind: string, before: string | null, after: string | null) => {
@@ -395,9 +410,8 @@ export async function saveOddsActionCache(
   raceKey: string,
   rows: Array<{ betType: OddsBetType; path: string; cname: string }>,
 ) {
-  const db = await getLiveDb();
   const updatedAt = new Date().toISOString();
-  await db.withTransactionAsync(async () => {
+  await withLiveDbTransaction(async (db) => {
     for (const row of rows) {
       await db.runAsync(
         `INSERT INTO odds_actions(race_key,bet_type,path,cname,updated_at) VALUES(?,?,?,?,?)
@@ -409,12 +423,14 @@ export async function saveOddsActionCache(
 }
 export async function clearOddsActionCacheTypes(raceKey: string, types: OddsBetType[]) {
   if (!types.length) return;
-  const db = await getLiveDb();
-  for (const type of types) await db.runAsync("DELETE FROM odds_actions WHERE race_key=? AND bet_type=?", raceKey, type);
+  await withLiveDbWrite(async (db) => {
+    for (const type of types) await db.runAsync("DELETE FROM odds_actions WHERE race_key=? AND bet_type=?", raceKey, type);
+  });
 }
 export async function clearOddsActionCache(raceKey: string) {
-  const db = await getLiveDb();
-  await db.runAsync("DELETE FROM odds_actions WHERE race_key=?", raceKey);
+  await withLiveDbWrite(async (db) => {
+    await db.runAsync("DELETE FROM odds_actions WHERE race_key=?", raceKey);
+  });
 }
 
 export async function saveOddsSnapshotRows(
@@ -425,8 +441,7 @@ export async function saveOddsSnapshotRows(
   _canonicalRaceId: string | null,
   options: { checkpoint?: string | null } = {},
 ) {
-  const db = await getLiveDb();
-  await db.withTransactionAsync(async () => {
+  await withLiveDbTransaction(async (db) => {
     for (const row of rows) {
       if (row.selection1 == null) continue;
       const s2 = row.selection2 ?? -1;
@@ -556,9 +571,16 @@ export async function getRaceResultCompleteness(raceKey: string) {
   ]);
   const resultCount=Number(result?.count??0),payoutCount=Number(payout?.count??0);
   const conditionsComplete=Boolean(race?.weather&&race?.trackCondition);
-  // Result settlement and race conditions are independent LIVE layers. Missing
-  // weather/track must not make an already stored result look incomplete forever.
-  return {resultCount,payoutCount,conditionsComplete,complete:resultCount>0&&payoutCount>0};
+  const resultReady=resultCount>0;
+  const payoutReady=payoutCount>0;
+  // Results, payouts and race conditions are independent LIVE layers. A stored
+  // finish order must immediately count as RESULT_READY so payout repair cannot
+  // starve older races in the result collector.
+  return {
+    resultCount,payoutCount,conditionsComplete,
+    resultReady,payoutReady,
+    complete:resultReady,
+  };
 }
 
 export type OfficialRaceConditions = {
@@ -584,19 +606,18 @@ export async function saveOfficialRaceResult(
   conditions?: OfficialRaceConditions,
 ) {
   if (!results.length) throw new Error("公式結果が空のため保存しない");
-  const db = await getLiveDb();
   const observedAt = new Date().toISOString();
-  const [existingResults,existingPayouts] = await Promise.all([
-    db.getFirstAsync<{ count: number }>("SELECT COUNT(*) AS count FROM race_results WHERE race_key=?",race.raceKey),
-    db.getFirstAsync<{ count: number }>("SELECT COUNT(*) AS count FROM payouts WHERE race_key=?",race.raceKey),
-  ]);
-  if (Number(existingResults?.count ?? 0) > results.length) {
-    throw new Error("既存結果より出走馬数が減るため更新を保留");
-  }
-  if (Number(existingPayouts?.count ?? 0) > 0 && payouts.length < Number(existingPayouts?.count ?? 0)) {
-    throw new Error("既存払戻より件数が減るため更新を保留");
-  }
-  await db.withTransactionAsync(async () => {
+  await withLiveDbTransaction(async (db) => {
+    const [existingResults,existingPayouts] = await Promise.all([
+      db.getFirstAsync<{ count: number }>("SELECT COUNT(*) AS count FROM race_results WHERE race_key=?",race.raceKey),
+      db.getFirstAsync<{ count: number }>("SELECT COUNT(*) AS count FROM payouts WHERE race_key=?",race.raceKey),
+    ]);
+    if (Number(existingResults?.count ?? 0) > results.length) {
+      throw new Error("既存結果より出走馬数が減るため更新を保留");
+    }
+    if (Number(existingPayouts?.count ?? 0) > 0 && payouts.length < Number(existingPayouts?.count ?? 0)) {
+      throw new Error("既存払戻より件数が減るため更新を保留");
+    }
     await db.runAsync(
       `INSERT INTO races(
         race_key,canonical_race_id,race_date,venue,race_no,race_name,race_class,start_time,

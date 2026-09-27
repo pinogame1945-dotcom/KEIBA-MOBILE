@@ -165,6 +165,8 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 `;
 
+let writeTail: Promise<void> = Promise.resolve();
+
 export async function getLiveDb() {
   if (!dbPromise) {
     dbPromise = openDatabaseAsync("keiba-mobile-live.db").then(async (db) => {
@@ -177,4 +179,35 @@ export async function getLiveDb() {
     });
   }
   return dbPromise;
+}
+
+
+/**
+ * Serializes every LIVE database mutation on the single Expo SQLite connection.
+ * Network/parser work may stay concurrent, but writes must never overlap transactions.
+ */
+export async function withLiveDbWrite<T>(
+  work: (db: Awaited<ReturnType<typeof getLiveDb>>) => Promise<T>,
+): Promise<T> {
+  const previous = writeTail.catch(() => undefined);
+  let release!: () => void;
+  writeTail = new Promise<void>((resolve) => { release = resolve; });
+  await previous;
+  try {
+    return await work(await getLiveDb());
+  } finally {
+    release();
+  }
+}
+
+export async function withLiveDbTransaction<T>(
+  work: (db: Awaited<ReturnType<typeof getLiveDb>>) => Promise<T>,
+): Promise<T> {
+  return withLiveDbWrite(async (db) => {
+    let result!: T;
+    await db.withTransactionAsync(async () => {
+      result = await work(db);
+    });
+    return result;
+  });
 }

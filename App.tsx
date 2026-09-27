@@ -12,11 +12,6 @@ type ScreenRoute =
   | { id: number; type: "WEEK" }
   | { id: number; type: "RACE"; raceKey: string };
 
-type PushRoute =
-  | { type: "HOME" }
-  | { type: "WEEK" }
-  | { type: "RACE"; raceKey: string };
-
 export default function App() {
   const nextRouteId = useRef(2);
   const [stack, setStack] = useState<ScreenRoute[]>([{ id: 1, type: "HOME" }]);
@@ -53,23 +48,29 @@ export default function App() {
     return () => subscription.remove();
   }, [goBack]);
 
-  const push = useCallback((route: PushRoute) => {
+  const openWeek = useCallback(() => {
     setStack((prev) => {
-      const last = prev[prev.length - 1];
-      if (route.type === "WEEK" && last.type === "WEEK") return prev;
-      if (route.type === "RACE" && last.type === "RACE" && last.raceKey === route.raceKey) return prev;
-      const next = { ...route, id: nextRouteId.current++ } as ScreenRoute;
-      const combined = [...prev, next];
-      return combined.length > 6 ? combined.slice(combined.length - 6) : combined;
+      const existingWeek = prev.map((route) => route.type).lastIndexOf("WEEK");
+      if (existingWeek >= 0) return prev.slice(0, existingWeek + 1);
+
+      const parent = prev[prev.length - 1]?.type === "RACE" ? prev.slice(0, -1) : prev;
+      return [...parent, { id: nextRouteId.current++, type: "WEEK" }];
     });
   }, []);
 
-  const openWeek = useCallback(() => push({ type: "WEEK" }), [push]);
-
   const openRace = useCallback((raceKey: string) => {
-    push({ type: "RACE", raceKey });
+    setStack((prev) => {
+      const last = prev[prev.length - 1];
+      if (last?.type === "RACE" && last.raceKey === raceKey) return prev;
+      const next: ScreenRoute = { id: nextRouteId.current++, type: "RACE", raceKey };
+
+      // Previous/next race navigation replaces the current race route instead
+      // of pushing another history entry. The parent WEEK/HOME route is preserved.
+      if (last?.type === "RACE") return [...prev.slice(0, -1), next];
+      return [...prev, next];
+    });
     void warmRaceData(raceKey, bumpCache).then(bumpCache).catch(() => undefined);
-  }, [push, bumpCache]);
+  }, [bumpCache]);
 
   const openHomeRoot = useCallback(() => {
     setStack([{ id: nextRouteId.current++, type: "HOME" }]);

@@ -1,7 +1,7 @@
-import { ODDS_FINAL_DELAY_MS, raceStartEpoch } from "../data/jra/oddsAvailability";
+import { raceStartEpoch } from "../data/jra/oddsAvailability";
 import {
-  getOddsAvailability,getRace,getRaceResultCompleteness,getWeekEntries,getWeekMeta,
-  listRacingWeekRaces,localTodayIso,setWeekMeta,
+  getFinalOddsConfirmedAt,getFinalOddsProbeAt,getOddsAvailability,getRace,getRaceResultCompleteness,
+  getWeekEntries,getWeekMeta,listRacingWeekRaces,localTodayIso,setWeekMeta,
 } from "../repositories/liveRepository";
 import { refreshLatestOdds } from "./oddsService";
 import { refreshCurrentWeekRaceData,refreshKnownRaceStates,refreshRaceState } from "./raceRefreshService";
@@ -66,9 +66,9 @@ async function refreshIncompleteResults(onMutation?:()=>void){
     })
     .sort((a,b)=>(raceStartEpoch(b)??0)-(raceStartEpoch(a)??0));
   let refreshed=0;
-  for(const race of candidates.slice(0,16)){
+  for(const race of candidates){
     const completeness=await getRaceResultCompleteness(race.raceKey);
-    if(completeness.complete)continue;
+    if(completeness.resultReady)continue;
     try{
       await refreshOfficialRaceResult(race);
       onMutation?.();
@@ -77,6 +77,29 @@ async function refreshIncompleteResults(onMutation?:()=>void){
     }catch{}
   }
 }
+async function refreshIncompletePayouts(){
+  const races=await listRacingWeekRaces();
+  const now=Date.now();
+  const candidates=races
+    .filter(race=>race.canonicalRaceId)
+    .filter(race=>{
+      const start=raceStartEpoch(race);
+      return start!=null&&start+15*60*1000<=now;
+    })
+    .sort((a,b)=>(raceStartEpoch(b)??0)-(raceStartEpoch(a)??0));
+
+  for(const race of candidates){
+    const state=await getRaceResultCompleteness(race.raceKey);
+    if(!state.resultReady||state.payoutReady)continue;
+    const key="payout_repair_attempt:"+race.raceKey;
+    const last=parsedTime(await getWeekMeta(key));
+    if(last&&now-last<30*60*1000)continue;
+    await setWeekMeta(key,new Date(now).toISOString());
+    await refreshOfficialRaceResult(race).catch(()=>undefined);
+    break;
+  }
+}
+
 async function refreshDueOdds(){
   const races=await listRacingWeekRaces();
   const now=Date.now(),today=localTodayIso();
@@ -84,34 +107,31 @@ async function refreshDueOdds(){
     .filter(race=>race.raceDate===today&&race.status==="OFFICIAL")
     .map(race=>({race,start:raceStartEpoch(race)}))
     .filter((item):item is {race:typeof races[number];start:number}=>
-      item.start!=null&&(
-        (item.start>now&&item.start-now<=3*60*60*1000)||
-        now>=item.start+ODDS_FINAL_DELAY_MS
-      )
+      item.start!=null&&item.start-now<=3*60*60*1000
     )
-    .sort((a,b)=>{
-      const aFinal=now>=a.start+ODDS_FINAL_DELAY_MS;
-      const bFinal=now>=b.start+ODDS_FINAL_DELAY_MS;
-      if(aFinal!==bFinal)return aFinal?-1:1;
-      return a.start-b.start;
-    });
-  let refreshed=0;
+    .sort((a,b)=>Math.abs(a.start-now)-Math.abs(b.start-now));
+
+  let attempts=0;
   for(const {race,start} of candidates){
-    const last=await latestOddsAt(race.raceKey);
-    const finalDue=now>=start+ODDS_FINAL_DELAY_MS;
-    if(finalDue){
-      if(last>=start+ODDS_FINAL_DELAY_MS)continue;
-    }else if(last&&now-last<oddsRefreshInterval(start-now)){
-      continue;
+    if(await getFinalOddsConfirmedAt(race.raceKey))continue;
+
+    const settlement=await getRaceResultCompleteness(race.raceKey);
+    if(settlement.resultReady){
+      const lastProbe=parsedTime(await getFinalOddsProbeAt(race.raceKey));
+      if(lastProbe&&now-lastProbe<10*60*1000)continue;
+    }else{
+      const last=await latestOddsAt(race.raceKey);
+      if(last&&now-last<oddsRefreshInterval(start-now))continue;
     }
+
     try{
       const entries=await getWeekEntries(race.raceKey);
       if(entries.length){
         await refreshLatestOdds(race,entries);
-        refreshed+=1;
+        attempts+=1;
       }
     }catch{}
-    if(refreshed>=2)break;
+    if(attempts>=2)break;
   }
 }
 
@@ -123,6 +143,7 @@ export function syncLiveCache(onMutation?:()=>void){
       refreshTodayVenueConditions().then(()=>onMutation?.()),
       refreshCardLayer(onMutation),
       refreshIncompleteResults(onMutation),
+      refreshIncompletePayouts(),
       refreshDueOdds(),
     ]);
   })().finally(()=>{syncPromise=null;});
@@ -144,14 +165,13 @@ export function warmRaceData(raceKey:string,onMutation?:()=>void){
       if(race.status!=="OFFICIAL"){
         repairs.push(refreshRaceState(race).then(()=>onMutation?.()));
       }
-      if(!completeness.complete){
+      if(!completeness.resultReady){
         repairs.push(refreshOfficialRaceResult(race).then(()=>onMutation?.()));
       }
       await Promise.allSettled(repairs);
       race=await getRace(raceKey)??race;
       const entries=await getWeekEntries(raceKey);
-      const lastOdds=await latestOddsAt(raceKey);
-      if(race.status==="OFFICIAL"&&entries.length&&start!=null&&now>=start+ODDS_FINAL_DELAY_MS&&lastOdds<start+ODDS_FINAL_DELAY_MS){
+      if(race.status==="OFFICIAL"&&entries.length&&!await getFinalOddsConfirmedAt(raceKey)){
         await refreshLatestOdds(race,entries).then(()=>onMutation?.()).catch(()=>undefined);
       }
       return;

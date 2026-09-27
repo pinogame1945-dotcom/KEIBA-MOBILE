@@ -31,6 +31,8 @@ jobs:
         run: npm run smoke:jra:entry
       - name: JRA venue runtime regression
         run: npm run smoke:jra:venue
+      - name: JRA final odds runtime regression
+        run: npm run smoke:jra:final-odds
       - name: Typecheck
         run: npm run typecheck
       - name: Expo config smoke
