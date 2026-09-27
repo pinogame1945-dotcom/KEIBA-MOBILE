@@ -8,7 +8,8 @@ import type {
 } from "../domain/live";
 import { raceStartEpoch } from "../data/jra/oddsAvailability";
 import {
-  getRace, getRacePayouts, getRaceResults, getVenueConditionSnapshot, getWeekEntries, listRacesForDates, localTodayIso,
+  getRace, getRacePayouts, getRaceResults, getVenueConditionSnapshot, getWeekEntries,
+  listRacesForDates, listRacingWeekRaces, localTodayIso,
 } from "../repositories/liveRepository";
 import { refreshRaceState } from "../services/raceRefreshService";
 import {
@@ -39,6 +40,13 @@ const HORSE_RANK_TYPES: OddsBetType[] = [
   "BRACKET_QUINELLA","QUINELLA","WIDE","EXACTA","TRIO","TRIFECTA",
 ];
 const ODDS_PAGE_SIZE = 80;
+const WEEKDAY = ["日","月","火","水","木","金","土"];
+
+function meetingDateLabel(iso: string) {
+  const [year,month,day] = iso.split("-").map(Number);
+  const date = new Date(year, (month || 1) - 1, day || 1);
+  return `${month}/${day}(${WEEKDAY[date.getDay()]})`;
+}
 
 const GATE_COLORS: Record<number, { bg: string; fg: string; border: string }> = {
   1: { bg: "#ffffff", fg: "#111827", border: "#9ca3af" },
@@ -154,6 +162,8 @@ export function RaceCardScreen({
   const [race, setRace] = useState<JraRace | null>(null);
   const [entries, setEntries] = useState<JraEntry[]>([]);
   const [dayRaces, setDayRaces] = useState<JraRace[]>([]);
+  const [weekRaces, setWeekRaces] = useState<JraRace[]>([]);
+  const [meetingSwitcherOpen, setMeetingSwitcherOpen] = useState(false);
   const [odds, setOdds] = useState<OddsRow[]>([]);
   const [oddsPage, setOddsPage] = useState(0);
   const [oddsHasNext, setOddsHasNext] = useState(false);
@@ -187,13 +197,16 @@ export function RaceCardScreen({
       setRace(null);
       return;
     }
-    const [nextEntries, oddsMeta, winOdds, nextResults, nextPayouts, sameDay, nextVenueSnapshot] = await Promise.all([
+    const [
+      nextEntries, oddsMeta, winOdds, nextResults, nextPayouts, sameDay, allWeekRaces, nextVenueSnapshot,
+    ] = await Promise.all([
       getWeekEntries(raceKey),
       loadOddsMeta(raceKey),
       loadLatestWinOdds(raceKey),
       getRaceResults(raceKey),
       getRacePayouts(raceKey),
       listRacesForDates([nextRace.raceDate]),
+      listRacingWeekRaces(),
       getVenueConditionSnapshot(nextRace.raceDate, nextRace.venue),
     ]);
     setRace(nextRace);
@@ -210,6 +223,7 @@ export function RaceCardScreen({
     setPayouts(nextPayouts);
     setVenueSnapshot(nextVenueSnapshot ?? null);
     setDayRaces(sameDay.filter((item) => item.venue === nextRace.venue).sort((a,b) => a.raceNo - b.raceNo));
+    setWeekRaces(allWeekRaces);
     setSelectedType((current) =>
       oddsMeta.availableTypes.includes(current) || !oddsMeta.availableTypes.length
         ? current
@@ -229,6 +243,7 @@ export function RaceCardScreen({
     horseOddsReturnRef.current = null;
     pendingCardRestoreYRef.current = null;
     setDetailHorseNo(null);
+    setMeetingSwitcherOpen(false);
     setRaceTab("CARD");
     setOddsView("NORMAL");
     setSortMode("HORSE_NO");
@@ -349,6 +364,49 @@ export function RaceCardScreen({
   const previousRace = currentIndex > 0 ? dayRaces[currentIndex - 1] : null;
   const nextRace = currentIndex >= 0 && currentIndex < dayRaces.length - 1 ? dayRaces[currentIndex + 1] : null;
 
+  const meetingSwitchOptions = useMemo(() => {
+    if (!race) return [] as Array<{
+      key: string;
+      raceDate: string;
+      venue: string;
+      target: JraRace | null;
+      current: boolean;
+    }>;
+    const groups = new Map<string,{
+      key: string;
+      raceDate: string;
+      venue: string;
+      target: JraRace | null;
+      current: boolean;
+    }>();
+    for (const candidate of weekRaces) {
+      if (
+        candidate.scheduleStatus !== "ACTIVE" ||
+        candidate.raceStatus === "CANCELLED" ||
+        candidate.raceStatus === "ABANDONED"
+      ) continue;
+      const key = candidate.raceDate + "|" + candidate.venue;
+      const existing = groups.get(key) ?? {
+        key,
+        raceDate: candidate.raceDate,
+        venue: candidate.venue,
+        target: null,
+        current: candidate.raceDate === race.raceDate && candidate.venue === race.venue,
+      };
+      if (candidate.raceNo === race.raceNo) existing.target = candidate;
+      groups.set(key, existing);
+    }
+    return [...groups.values()].sort(
+      (a,b) => a.raceDate.localeCompare(b.raceDate) || a.venue.localeCompare(b.venue,"ja"),
+    );
+  }, [race, weekRaces]);
+
+  const switchMeeting = useCallback((target: JraRace | null, current: boolean) => {
+    setMeetingSwitcherOpen(false);
+    if (!target || current || target.raceKey === raceKey) return;
+    onOpenRace(target.raceKey);
+  }, [onOpenRace, raceKey]);
+
   const refreshCard = async () => {
     if (!race || busy) return;
     if (race.scheduleStatus !== "ACTIVE" || race.raceStatus === "CANCELLED" || race.raceStatus === "ABANDONED") {
@@ -414,18 +472,26 @@ export function RaceCardScreen({
   }, []);
 
   const handleBack = useCallback(() => {
+    if (meetingSwitcherOpen) {
+      setMeetingSwitcherOpen(false);
+      return;
+    }
     if (returnFromHorseOdds()) return;
     (onBack ?? onOpenWeek)();
-  }, [onBack, onOpenWeek, returnFromHorseOdds]);
+  }, [meetingSwitcherOpen, onBack, onOpenWeek, returnFromHorseOdds]);
 
   useEffect(() => {
-    if (!active || !horseOddsReturnRef.current) return;
+    if (!active || (!meetingSwitcherOpen && !horseOddsReturnRef.current)) return;
     const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (meetingSwitcherOpen) {
+        setMeetingSwitcherOpen(false);
+        return true;
+      }
       if (!returnFromHorseOdds()) return false;
       return true;
     });
     return () => subscription.remove();
-  }, [active, raceTab, returnFromHorseOdds]);
+  }, [active, meetingSwitcherOpen, raceTab, returnFromHorseOdds]);
 
   useEffect(() => {
     if (!active || raceTab !== "CARD") return;
@@ -495,8 +561,11 @@ export function RaceCardScreen({
           >
             <Text style={styles.raceNavText}>‹ {previousRace ? previousRace.raceNo + "R" : "前R"}</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.raceNavCenter} onPress={onOpenWeek}>
-            <Text style={styles.raceNavCenterText}>今週のレース</Text>
+          <TouchableOpacity
+            style={[styles.raceNavCenter, meetingSwitcherOpen && styles.raceNavCenterOpen]}
+            onPress={() => setMeetingSwitcherOpen((value) => !value)}
+          >
+            <Text style={styles.raceNavCenterText}>今週のレース {meetingSwitcherOpen ? "▲" : "▼"}</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.raceNavSide, !nextRace && styles.disabled]}
@@ -506,6 +575,47 @@ export function RaceCardScreen({
             <Text style={styles.raceNavText}>{nextRace ? nextRace.raceNo + "R" : "次R"} ›</Text>
           </TouchableOpacity>
         </View>
+
+        {meetingSwitcherOpen ? (
+          <View style={styles.meetingSwitcher}>
+            <View style={styles.meetingSwitcherHeader}>
+              <Text style={styles.meetingSwitcherTitle}>同じ {race.raceNo}R へ切替</Text>
+              <Text style={styles.meetingSwitcherHint}>日付・競馬場を1タップで選択</Text>
+            </View>
+            <View style={styles.meetingSwitcherGrid}>
+              {meetingSwitchOptions.map((option) => {
+                const disabled = !option.target;
+                return (
+                  <TouchableOpacity
+                    key={option.key}
+                    disabled={disabled}
+                    style={[
+                      styles.meetingSwitchButton,
+                      option.current && styles.meetingSwitchButtonCurrent,
+                      disabled && styles.disabled,
+                    ]}
+                    onPress={() => switchMeeting(option.target, option.current)}
+                  >
+                    <Text style={[
+                      styles.meetingSwitchDate,
+                      option.current && styles.meetingSwitchTextCurrent,
+                    ]}>{meetingDateLabel(option.raceDate)}</Text>
+                    <View style={styles.meetingSwitchVenueRow}>
+                      <Text style={[
+                        styles.meetingSwitchVenue,
+                        option.current && styles.meetingSwitchTextCurrent,
+                      ]}>{option.venue}</Text>
+                      {option.current ? (
+                        <Text style={styles.meetingSwitchCurrentBadge}>現在</Text>
+                      ) : null}
+                    </View>
+                    {disabled ? <Text style={styles.meetingSwitchMissing}>{race.raceNo}Rなし</Text> : null}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+        ) : null}
 
         <View style={styles.hero}>
           <View style={styles.rowBetween}>
@@ -884,7 +994,28 @@ const styles = StyleSheet.create({
   raceNavSide: { width: 82, minHeight: 42, alignItems: "center", justifyContent: "center" },
   raceNavText: { color: "#111827", fontSize: 12, fontWeight: "900" },
   raceNavCenter: { flex: 1, minHeight: 42, backgroundColor: "#111827", borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  raceNavCenterOpen: { borderBottomLeftRadius: 8, borderBottomRightRadius: 8 },
   raceNavCenterText: { color: "#fff", fontSize: 12, fontWeight: "900" },
+  meetingSwitcher: { backgroundColor: "#fff", borderRadius: 16, padding: 12, gap: 10 },
+  meetingSwitcherHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
+  meetingSwitcherTitle: { color: "#111827", fontSize: 13, fontWeight: "900" },
+  meetingSwitcherHint: { color: "#9ca3af", fontSize: 9, fontWeight: "800" },
+  meetingSwitcherGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  meetingSwitchButton: {
+    minWidth: "30%", flexGrow: 1, flexBasis: 96, minHeight: 62,
+    backgroundColor: "#eef2f7", borderRadius: 12, paddingHorizontal: 10, paddingVertical: 9,
+    justifyContent: "center",
+  },
+  meetingSwitchButtonCurrent: { backgroundColor: "#111827" },
+  meetingSwitchDate: { color: "#6b7280", fontSize: 9, fontWeight: "800" },
+  meetingSwitchVenueRow: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 3 },
+  meetingSwitchVenue: { color: "#111827", fontSize: 14, fontWeight: "900" },
+  meetingSwitchTextCurrent: { color: "#fff" },
+  meetingSwitchCurrentBadge: {
+    backgroundColor: "#fff", color: "#111827", borderRadius: 999,
+    paddingHorizontal: 5, paddingVertical: 1, fontSize: 7, fontWeight: "900",
+  },
+  meetingSwitchMissing: { color: "#9ca3af", fontSize: 8, fontWeight: "800", marginTop: 2 },
   disabled: { opacity: 0.32 },
   raceTabs: { flexDirection: "row", gap: 6 },
   raceTab: { flex: 1, minHeight: 50, backgroundColor: "#e5e7eb", borderRadius: 13, alignItems: "center", justifyContent: "center" },
