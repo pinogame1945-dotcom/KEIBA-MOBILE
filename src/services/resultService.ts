@@ -56,6 +56,10 @@ async function fetchJraResultFallback(race: JraRace) {
 }
 
 async function refreshOfficialRaceResultImpl(race: JraRace) {
+  if (race.scheduleStatus !== "ACTIVE") throw new Error("順延前の日程には結果を取りに行かない");
+  if (race.raceStatus === "CANCELLED" || race.raceStatus === "ABANDONED") {
+    throw new Error("中止・取りやめレースには結果を取りに行かない");
+  }
   const start = raceStartEpoch(race);
   if (start != null && Date.now() < start + RESULT_SETTLE_DELAY_MS) {
     throw new Error("発走直後のため確定結果の公開を待っている");
