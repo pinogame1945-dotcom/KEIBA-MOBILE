@@ -1,9 +1,16 @@
 export type RaceStatus = "SCHEDULED" | "OFFICIAL";
+export type RaceLifecycleStatus = "SCHEDULED" | "COMPLETED" | "CANCELLED" | "ABANDONED";
+export type RaceScheduleStatus = "ACTIVE" | "RESCHEDULED";
 
 export type JraRace = {
   raceKey: string;
   canonicalRaceId: string | null;
   raceDate: string;
+  scheduledDate: string;
+  actualDate: string | null;
+  raceStatus: RaceLifecycleStatus;
+  scheduleStatus: RaceScheduleStatus;
+  supersededByRaceKey: string | null;
   venue: string;
   raceNo: number;
   raceName: string | null;
@@ -55,7 +62,10 @@ export type NoticeKind =
   | "WEATHER_CHANGED"
   | "START_TIME_CHANGED"
   | "SCRATCHED"
-  | "EXCLUDED";
+  | "EXCLUDED"
+  | "MEETING_RESCHEDULED"
+  | "MEETING_CANCELLED"
+  | "RACE_CANCELLED";
 
 export type RaceNotice = {
   id: number;
@@ -106,6 +116,15 @@ export type ScheduleRace = {
   sourceUrl: string;
 };
 
+export type ScheduleDisruption = {
+  raceDate: string;
+  venue: string;
+  scope: "MEETING" | "RACE";
+  raceNo: number | null;
+  kind: "CANCELLED" | "ABANDONED";
+  sourceUrl: string;
+};
+
 export type ScheduleMeeting = {
   raceDate: string;
   venue: string;
@@ -118,6 +137,7 @@ export type ScheduleTarget = {
   fetchedAt: string;
   dates: string[];
   meetings: ScheduleMeeting[];
+  disruptions: ScheduleDisruption[];
   sourceUrls: string[];
   fingerprint: string;
 };
