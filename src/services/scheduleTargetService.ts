@@ -4,32 +4,99 @@ import { calendarDayUrl,parseCalendarDay,scheduleTargetFingerprint } from "../da
 import { getScheduleTarget,localTodayIso,saveScheduleTarget } from "../repositories/liveRepository";
 
 const FRESH_MS=30*60*1000;
+
 function shiftDate(iso:string,days:number){
   const [y,m,d]=iso.split("-").map(Number);
-  const date=new Date(Date.UTC(y,m-1,d));date.setUTCDate(date.getUTCDate()+days);
+  const date=new Date(Date.UTC(y,m-1,d));
+  date.setUTCDate(date.getUTCDate()+days);
   return date.toISOString().slice(0,10);
 }
 function dayDistance(a:string,b:string){
   const am=Date.parse(a+"T00:00:00Z"),bm=Date.parse(b+"T00:00:00Z");
-  return Number.isFinite(am)&&Number.isFinite(bm)?Math.round(Math.abs(am-bm)/86400000):999;
+  return Number.isFinite(am)&&Number.isFinite(bm)?Math.abs(am-bm)/86400000:Number.POSITIVE_INFINITY;
 }
 function fresh(target:ScheduleTarget|null){
   const ms=target?Date.parse(target.fetchedAt):NaN;
   return Number.isFinite(ms)&&Date.now()-ms<FRESH_MS;
 }
+
 export async function refreshScheduleTarget(force=false):Promise<ScheduleTarget>{
-  const cached=await getScheduleTarget();if(!force&&fresh(cached))return cached!;
-  const today=localTodayIso(),found=new Map<string,{url:string;meetings:ScheduleTarget["meetings"]}>();
-  for(const offset of [0,-1,1,-2,2,-3,3,4]){
-    const date=shiftDate(today,offset),url=calendarDayUrl(date);
-    try{const meetings=parseCalendarDay(await fetchJraHtml(url),url);if(meetings.length)found.set(date,{url,meetings});}catch{}
+  const cached=await getScheduleTarget();
+  if(!force&&fresh(cached))return cached!;
+
+  const today=localTodayIso();
+  const cachedDates=cached?.dates.length?[...cached.dates].sort():[];
+  const cachedLatest=cachedDates.length?cachedDates[cachedDates.length-1]:null;
+  const probeDates:string[]=[];
+
+  if(cached&&cachedLatest&&cachedLatest>=today){
+    probeDates.push(...cachedDates);
+    for(let offset=1;offset<=3;offset+=1)probeDates.push(shiftDate(cachedLatest,offset));
+  }else{
+    // Fresh install on a race Sunday must still recover Saturday.
+    probeDates.push(shiftDate(today,-1));
+    for(let offset=0;offset<=10;offset+=1)probeDates.push(shiftDate(today,offset));
   }
-  if(!found.size){if(cached)return cached;throw new Error("JRA開催日程から対象開催日を発見できない");}
-  const dates=[...found.keys()].sort();
-  const anchor=dates.map(date=>({date,distance:dayDistance(date,today)})).sort((a,b)=>a.distance-b.distance||a.date.localeCompare(b.date))[0].date;
-  const selected=dates.filter(date=>dayDistance(date,anchor)<=3).sort();
+
+  const parsedByDate=new Map<string,{url:string;meetings:ScheduleTarget["meetings"]}>();
+  let firstFutureDate:string|null=null;
+  for(const date of [...new Set(probeDates)].sort()){
+    if((!cachedLatest||cachedLatest<today)&&firstFutureDate&&date>=today&&dayDistance(firstFutureDate,date)>3)break;
+    const url=calendarDayUrl(date);
+    try{
+      const meetings=parseCalendarDay(await fetchJraHtml(url),url);
+      if(!meetings.length)continue;
+      parsedByDate.set(date,{url,meetings});
+      if(date>=today&&firstFutureDate==null)firstFutureDate=date;
+    }catch{
+      // Missing calendar pages never erase a verified cached target.
+    }
+  }
+
+  let selectedDates:string[];
+  if(cached&&cachedLatest&&cachedLatest>=today){
+    const knownStart=cachedDates[0];
+    const discovered=[...parsedByDate.keys()].sort();
+    selectedDates=discovered.filter(date=>date>=knownStart&&dayDistance(knownStart,date)<=6);
+    if(!selectedDates.length)selectedDates=cachedDates;
+  }else{
+    const discovered=[...parsedByDate.keys()].sort();
+    const yesterday=shiftDate(today,-1);
+    const yesterdayIsRace=parsedByDate.has(yesterday);
+    const future=discovered.filter(date=>date>=today);
+    if(!future.length){
+      if(cached)return cached;
+      throw new Error("JRA開催日程から次回開催日を発見できない");
+    }
+    const first=future[0];
+    selectedDates=future.filter(date=>dayDistance(first,date)<=3);
+    if(yesterdayIsRace&&dayDistance(yesterday,first)<=1)selectedDates=[yesterday,...selectedDates];
+  }
+
   const meetings:ScheduleTarget["meetings"]=[],sourceUrls:string[]=[];
-  for(const date of selected){const item=found.get(date);if(item){meetings.push(...item.meetings);sourceUrls.push(item.url);}}
-  const target:ScheduleTarget={fetchedAt:new Date().toISOString(),dates:[...new Set(meetings.map(m=>m.raceDate))].sort(),meetings,sourceUrls:[...new Set(sourceUrls)],fingerprint:""};
-  target.fingerprint=scheduleTargetFingerprint(target);await saveScheduleTarget(target);return target;
+  for(const date of [...new Set(selectedDates)].sort()){
+    const parsed=parsedByDate.get(date);
+    if(parsed){
+      meetings.push(...parsed.meetings);
+      sourceUrls.push(parsed.url);
+    }else if(cached){
+      meetings.push(...cached.meetings.filter(meeting=>meeting.raceDate===date));
+      sourceUrls.push(calendarDayUrl(date));
+    }
+  }
+  if(!meetings.length){
+    if(cached)return cached;
+    throw new Error("JRA開催日程の対象開催を解析できない");
+  }
+
+  const target:ScheduleTarget={
+    fetchedAt:new Date().toISOString(),
+    dates:[...new Set(meetings.map(meeting=>meeting.raceDate))].sort(),
+    meetings,
+    sourceUrls:[...new Set(sourceUrls)],
+    fingerprint:"",
+  };
+  target.fingerprint=scheduleTargetFingerprint(target);
+  await saveScheduleTarget(target);
+  return target;
 }
