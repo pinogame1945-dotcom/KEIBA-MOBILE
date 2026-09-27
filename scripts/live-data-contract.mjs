@@ -109,3 +109,11 @@ assert.ok(
 );
 
 console.log("LIVE data contract: PASS");
+
+const liveDb = readFileSync(new URL("../src/storage/liveDb.ts", import.meta.url), "utf8");
+const schemaEnd = liveDb.indexOf("`;");
+const rescheduleIndex = liveDb.indexOf("idx_races_canonical_schedule");
+assert.ok(
+  rescheduleIndex > schemaEnd,
+  "reschedule index must be created only after migration columns exist on upgraded DBs",
+);
