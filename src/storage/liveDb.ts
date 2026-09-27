@@ -105,6 +105,32 @@ CREATE TABLE IF NOT EXISTS odds_actions (
   PRIMARY KEY (race_key, bet_type)
 );
 
+CREATE TABLE IF NOT EXISTS race_results (
+  race_key TEXT NOT NULL,
+  finish_position INTEGER,
+  finish_raw TEXT NOT NULL,
+  horse_no INTEGER,
+  horse_name TEXT NOT NULL,
+  finish_time TEXT,
+  margin TEXT,
+  last_3f REAL,
+  popularity INTEGER,
+  result_status TEXT NOT NULL,
+  observed_at TEXT NOT NULL,
+  PRIMARY KEY (race_key, horse_name)
+);
+CREATE INDEX IF NOT EXISTS idx_race_results_race_finish ON race_results(race_key, finish_position);
+
+CREATE TABLE IF NOT EXISTS payouts (
+  race_key TEXT NOT NULL,
+  bet_type TEXT NOT NULL,
+  selection TEXT NOT NULL,
+  payout_yen INTEGER,
+  popularity INTEGER,
+  observed_at TEXT NOT NULL,
+  PRIMARY KEY (race_key, bet_type, selection)
+);
+
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
