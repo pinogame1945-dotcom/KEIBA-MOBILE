@@ -140,11 +140,13 @@ export function parseCalendarDay(html: string, sourceUrl: string): ScheduleMeeti
 }
 
 
-export function scheduleTargetFingerprint(target: { meetings: ScheduleMeeting[] }) {
-  return target.meetings
+export function scheduleTargetFingerprint(target: { meetings: ScheduleMeeting[]; disruptions?: ScheduleDisruption[] }) {
+  const races = target.meetings
     .flatMap((meeting) => meeting.races.map((race) =>
       [race.raceDate,race.venue,meeting.meetingNo,meeting.meetingDay,race.raceNo].join("|")
-    ))
-    .sort()
-    .join(",");
+    ));
+  const disruptions = (target.disruptions ?? []).map((item) =>
+    ["DISRUPTION",item.raceDate,item.venue,item.scope,item.raceNo ?? "",item.kind].join("|")
+  );
+  return [...races,...disruptions].sort().join(",");
 }
