@@ -114,6 +114,26 @@ export type ScheduleMeeting = {
   races: ScheduleRace[];
 };
 
+export type ScheduleTarget = {
+  fetchedAt: string;
+  dates: string[];
+  meetings: ScheduleMeeting[];
+  sourceUrls: string[];
+  fingerprint: string;
+};
+
+export type VenueConditionSnapshot = {
+  raceDate: string;
+  venue: string;
+  weather: string | null;
+  turfCondition: string | null;
+  dirtCondition: string | null;
+  sourceObservedLabel: string | null;
+  sourceObservedDate: string | null;
+  fetchedAt: string;
+  sourceUrl: string;
+};
+
 
 export type JraRaceResult = {
   raceKey: string;

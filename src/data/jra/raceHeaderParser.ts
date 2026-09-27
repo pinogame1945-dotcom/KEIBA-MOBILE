@@ -1,11 +1,14 @@
 import { load } from "cheerio";
 import type { JraRace } from "../../domain/live";
 
-const VENUE_BY_CODE: Record<string, string> = {
+export const VENUE_BY_CODE: Record<string, string> = {
   "01": "札幌", "02": "函館", "03": "福島", "04": "新潟", "05": "東京",
   "06": "中山", "07": "中京", "08": "京都", "09": "阪神", "10": "小倉",
 };
 const VENUES = Object.values(VENUE_BY_CODE);
+const CODE_BY_VENUE = Object.fromEntries(
+  Object.entries(VENUE_BY_CODE).map(([code, venue]) => [venue, code]),
+) as Record<string, string>;
 
 export type JraRaceIdentity = {
   venueCode: string;
@@ -77,6 +80,22 @@ export function canonicalRaceIdFromIdentity(identity: JraRaceIdentity | null): s
     String(identity.meetingNo).padStart(2, "0") +
     String(identity.meetingDay).padStart(2, "0") +
     String(identity.raceNo).padStart(2, "0");
+}
+
+export function canonicalRaceIdFromSchedule(
+  raceDate: string,
+  venue: string,
+  meetingNo: number,
+  meetingDay: number,
+  raceNo: number,
+): string | null {
+  const venueCode = CODE_BY_VENUE[venue];
+  const year = Number(raceDate.slice(0, 4));
+  if (!venueCode || !Number.isFinite(year)) return null;
+  return String(year) + venueCode +
+    String(meetingNo).padStart(2, "0") +
+    String(meetingDay).padStart(2, "0") +
+    String(raceNo).padStart(2, "0");
 }
 
 export function parseJraRaceHeader(html: string, sourceUrl: string): JraRace {

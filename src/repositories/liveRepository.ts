@@ -1,6 +1,8 @@
 import type {
   JraEntry, JraPayout, JraRace, JraRaceCard, JraRaceResult, OddsBetType, OddsRow, RaceNotice, ScheduleMeeting,
+  ScheduleTarget, VenueConditionSnapshot,
 } from "../domain/live";
+import { canonicalRaceIdFromSchedule } from "../data/jra/raceHeaderParser";
 import { getLiveDb } from "../storage/liveDb";
 
 export type JraOddsBetType = OddsBetType;
@@ -14,6 +16,63 @@ export function localTodayIso(nowMs = Date.now()) {
 
 function scheduleRaceKey(raceDate: string, venue: string, raceNo: number) {
   return "JRA:" + raceDate + ":" + venue + ":" + raceNo;
+}
+
+
+const SCHEDULE_TARGET_META = "schedule_target_v2";
+
+export async function saveScheduleTarget(target: ScheduleTarget) {
+  await setWeekMeta(SCHEDULE_TARGET_META, JSON.stringify(target));
+}
+
+export async function getScheduleTarget(): Promise<ScheduleTarget | null> {
+  const raw = await getWeekMeta(SCHEDULE_TARGET_META);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as ScheduleTarget;
+    if (!Array.isArray(parsed.dates) || !Array.isArray(parsed.meetings)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function scheduleRaceAsDisplay(
+  meeting: ScheduleMeeting,
+  race: ScheduleMeeting["races"][number],
+  fetchedAt: string,
+): JraRace {
+  return {
+    raceKey: scheduleRaceKey(race.raceDate, race.venue, race.raceNo),
+    canonicalRaceId: canonicalRaceIdFromSchedule(
+      race.raceDate, race.venue, meeting.meetingNo, meeting.meetingDay, race.raceNo,
+    ),
+    raceDate: race.raceDate,
+    venue: race.venue,
+    raceNo: race.raceNo,
+    raceName: race.raceName,
+    raceClass: null,
+    startTime: race.startTime,
+    discipline: race.discipline,
+    surface: race.surface,
+    distanceM: race.distanceM,
+    direction: null,
+    weather: null,
+    trackCondition: null,
+    sourceUrl: race.sourceUrl,
+    fetchedAt,
+    status: "SCHEDULED",
+  };
+}
+
+function scheduledDisplayRaces(target: ScheduleTarget | null, dates: string[]) {
+  if (!target) return [] as JraRace[];
+  const wanted = new Set(dates);
+  return target.meetings.flatMap((meeting) =>
+    wanted.has(meeting.raceDate)
+      ? meeting.races.map((race) => scheduleRaceAsDisplay(meeting, race, target.fetchedAt))
+      : []
+  );
 }
 
 export async function saveScheduleMeetings(meetings: ScheduleMeeting[]) {
@@ -165,12 +224,42 @@ function raceSelect() {
     direction,weather,track_condition AS trackCondition,source_url AS sourceUrl,fetched_at AS fetchedAt,status`;
 }
 
-export async function listTodayRaces() {
+export async function listOfficialRacesForDates(dates: string[]) {
+  if (!dates.length) return [] as JraRace[];
   const db = await getLiveDb();
+  const placeholders = dates.map(() => "?").join(",");
   return db.getAllAsync<JraRace>(
-    `SELECT ${raceSelect()} FROM races WHERE race_date=? ORDER BY venue,race_no`,
-    localTodayIso(),
+    `SELECT ${raceSelect()} FROM races WHERE race_date IN (${placeholders}) AND status='OFFICIAL'
+     ORDER BY race_date,venue,race_no`,
+    ...dates,
   );
+}
+
+export async function listRacesForDates(dates: string[]) {
+  if (!dates.length) return [] as JraRace[];
+  const [target, official] = await Promise.all([
+    getScheduleTarget(),
+    listOfficialRacesForDates(dates),
+  ]);
+  const scheduled = scheduledDisplayRaces(target, dates);
+  if (!scheduled.length) {
+    const db = await getLiveDb();
+    const placeholders = dates.map(() => "?").join(",");
+    return db.getAllAsync<JraRace>(
+      `SELECT ${raceSelect()} FROM races WHERE race_date IN (${placeholders}) ORDER BY race_date,venue,race_no`,
+      ...dates,
+    );
+  }
+  const byKey = new Map(official.map((race) => [race.raceKey, race]));
+  const scheduledKeys = new Set(scheduled.map((race) => race.raceKey));
+  return scheduled
+    .map((race) => byKey.get(race.raceKey) ?? race)
+    .concat(official.filter((race) => !scheduledKeys.has(race.raceKey)))
+    .sort((a,b) => a.raceDate.localeCompare(b.raceDate) || a.venue.localeCompare(b.venue,"ja") || a.raceNo - b.raceNo);
+}
+
+export async function listTodayRaces() {
+  return listRacesForDates([localTodayIso()]);
 }
 
 function shiftLocalIso(iso: string, days: number) {
@@ -188,22 +277,26 @@ export function racingWeekCandidateDates(nowMs = Date.now()) {
   return [saturday, shiftLocalIso(saturday, 1), shiftLocalIso(saturday, 2)];
 }
 
-export async function listRacesForDates(dates: string[]) {
-  if (!dates.length) return [] as JraRace[];
-  const db = await getLiveDb();
-  const placeholders = dates.map(() => "?").join(",");
-  return db.getAllAsync<JraRace>(
-    `SELECT ${raceSelect()} FROM races WHERE race_date IN (${placeholders}) ORDER BY race_date,venue,race_no`,
-    ...dates,
-  );
+export async function listRacingWeekRaces(nowMs = Date.now()) {
+  const target = await getScheduleTarget();
+  return listRacesForDates(target?.dates?.length ? target.dates : racingWeekCandidateDates(nowMs));
 }
 
-export async function listRacingWeekRaces(nowMs = Date.now()) {
-  return listRacesForDates(racingWeekCandidateDates(nowMs));
-}
 export async function getRace(raceKey: string) {
   const db = await getLiveDb();
-  return db.getFirstAsync<JraRace>(`SELECT ${raceSelect()} FROM races WHERE race_key=?`, raceKey);
+  const stored = await db.getFirstAsync<JraRace>(`SELECT ${raceSelect()} FROM races WHERE race_key=?`, raceKey);
+  if (stored?.status === "OFFICIAL") return stored;
+  const target = await getScheduleTarget();
+  if (target) {
+    for (const meeting of target.meetings) {
+      for (const race of meeting.races) {
+        if (scheduleRaceKey(race.raceDate,race.venue,race.raceNo) === raceKey) {
+          return scheduleRaceAsDisplay(meeting,race,target.fetchedAt);
+        }
+      }
+    }
+  }
+  return stored;
 }
 export async function getWeekEntries(raceKey: string) {
   const db = await getLiveDb();
@@ -233,6 +326,33 @@ export async function getWeekMeta(key: string) {
 export async function setWeekMeta(key: string, value: string) {
   const db = await getLiveDb();
   await db.runAsync("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, value);
+}
+
+
+export async function saveVenueConditionSnapshot(snapshot: VenueConditionSnapshot) {
+  const db = await getLiveDb();
+  await db.runAsync(
+    `INSERT INTO venue_conditions(
+      race_date,venue,weather,turf_condition,dirt_condition,source_observed_label,source_observed_date,fetched_at,source_url
+    ) VALUES(?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(race_date,venue) DO UPDATE SET
+      weather=excluded.weather,turf_condition=excluded.turf_condition,dirt_condition=excluded.dirt_condition,
+      source_observed_label=excluded.source_observed_label,source_observed_date=excluded.source_observed_date,
+      fetched_at=excluded.fetched_at,source_url=excluded.source_url`,
+    snapshot.raceDate,snapshot.venue,snapshot.weather,snapshot.turfCondition,snapshot.dirtCondition,
+    snapshot.sourceObservedLabel,snapshot.sourceObservedDate,snapshot.fetchedAt,snapshot.sourceUrl,
+  );
+}
+
+export async function getVenueConditionSnapshot(raceDate: string, venue: string) {
+  const db = await getLiveDb();
+  return db.getFirstAsync<VenueConditionSnapshot>(
+    `SELECT race_date AS raceDate,venue,weather,turf_condition AS turfCondition,dirt_condition AS dirtCondition,
+      source_observed_label AS sourceObservedLabel,source_observed_date AS sourceObservedDate,
+      fetched_at AS fetchedAt,source_url AS sourceUrl
+     FROM venue_conditions WHERE race_date=? AND venue=?`,
+    raceDate,venue,
+  );
 }
 
 export async function getOddsActionCache(raceKey: string) {
@@ -391,15 +511,23 @@ export async function getRacePayouts(raceKey: string) {
 export async function listRaceKeysWithResults(dates: string[]) {
   if (!dates.length) return [] as string[];
   const db = await getLiveDb();
-  const placeholders = dates.map(() => "?").join(",");
-  const rows = await db.getAllAsync<{ raceKey: string }>(
-    `SELECT DISTINCT rr.race_key AS raceKey
-     FROM race_results rr
-     INNER JOIN races r ON r.race_key=rr.race_key
-     WHERE r.race_date IN (${placeholders})`,
-    ...dates,
-  );
-  return rows.map((row) => row.raceKey);
+  const rows = await db.getAllAsync<{ raceKey: string }>("SELECT DISTINCT race_key AS raceKey FROM race_results");
+  const prefixes = dates.map((date) => "JRA:" + date + ":");
+  return rows.map((row) => row.raceKey).filter((key) => prefixes.some((prefix) => key.startsWith(prefix)));
+}
+
+export async function getRaceResultCompleteness(raceKey: string) {
+  const db = await getLiveDb();
+  const [result,payout,race] = await Promise.all([
+    db.getFirstAsync<{ count: number }>("SELECT COUNT(*) AS count FROM race_results WHERE race_key=?",raceKey),
+    db.getFirstAsync<{ count: number }>("SELECT COUNT(*) AS count FROM payouts WHERE race_key=?",raceKey),
+    db.getFirstAsync<{ weather: string | null; trackCondition: string | null }>(
+      "SELECT weather,track_condition AS trackCondition FROM races WHERE race_key=?",raceKey,
+    ),
+  ]);
+  const resultCount=Number(result?.count??0),payoutCount=Number(payout?.count??0);
+  const conditionsComplete=Boolean(race?.weather&&race?.trackCondition);
+  return {resultCount,payoutCount,conditionsComplete,complete:resultCount>0&&payoutCount>0&&conditionsComplete};
 }
 
 export type OfficialRaceConditions = {
@@ -457,7 +585,30 @@ export async function saveOfficialRaceResult(
   if (!results.length) throw new Error("公式結果が空のため保存しない");
   const db = await getLiveDb();
   const observedAt = new Date().toISOString();
+  const [existingResults,existingPayouts] = await Promise.all([
+    db.getFirstAsync<{ count: number }>("SELECT COUNT(*) AS count FROM race_results WHERE race_key=?",race.raceKey),
+    db.getFirstAsync<{ count: number }>("SELECT COUNT(*) AS count FROM payouts WHERE race_key=?",race.raceKey),
+  ]);
+  if (Number(existingResults?.count ?? 0) > results.length) {
+    throw new Error("既存結果より出走馬数が減るため更新を保留");
+  }
+  if (Number(existingPayouts?.count ?? 0) > 0 && payouts.length < Number(existingPayouts?.count ?? 0)) {
+    throw new Error("既存払戻より件数が減るため更新を保留");
+  }
   await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `INSERT INTO races(
+        race_key,canonical_race_id,race_date,venue,race_no,race_name,race_class,start_time,
+        discipline,surface,distance_m,direction,weather,track_condition,source_url,fetched_at,status
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(race_key) DO UPDATE SET
+        canonical_race_id=COALESCE(excluded.canonical_race_id,races.canonical_race_id),
+        race_name=COALESCE(races.race_name,excluded.race_name),
+        weather=COALESCE(races.weather,excluded.weather),
+        track_condition=COALESCE(races.track_condition,excluded.track_condition)`,
+      race.raceKey,race.canonicalRaceId,race.raceDate,race.venue,race.raceNo,race.raceName,race.raceClass,race.startTime,
+      race.discipline,race.surface,race.distanceM,race.direction,race.weather,race.trackCondition,race.sourceUrl,race.fetchedAt,race.status,
+    );
     await db.runAsync("DELETE FROM race_results WHERE race_key=?", race.raceKey);
     await db.runAsync("DELETE FROM payouts WHERE race_key=?", race.raceKey);
     for (const row of results) {

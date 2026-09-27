@@ -100,3 +100,13 @@ export function parseCalendarDay(html: string, sourceUrl: string): ScheduleMeeti
   if (!meetings.length) throw new Error("JRA開催日程からレース一覧を解析できない");
   return meetings;
 }
+
+
+export function scheduleTargetFingerprint(target: { meetings: ScheduleMeeting[] }) {
+  return target.meetings
+    .flatMap((meeting) => meeting.races.map((race) =>
+      [race.raceDate,race.venue,meeting.meetingNo,meeting.meetingDay,race.raceNo].join("|")
+    ))
+    .sort()
+    .join(",");
+}
