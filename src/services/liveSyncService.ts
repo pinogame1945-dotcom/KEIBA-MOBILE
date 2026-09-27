@@ -6,6 +6,7 @@ import {
 import { refreshLatestOdds } from "./oddsService";
 import { refreshCurrentWeekRaceData,refreshDueRaceStates,refreshRaceState } from "./raceRefreshService";
 import { refreshOfficialRaceResult } from "./resultService";
+import { refreshTodayVenueConditions } from "./venueConditionService";
 
 const WEEK_ATTEMPT_META = "live_sync_week_attempt_at";
 let syncPromise: Promise<void> | null = null;
@@ -54,16 +55,20 @@ async function refreshOnePendingResult() {
   const resultKeys = new Set(await listRaceKeysWithResults(dates));
   const now = Date.now();
 
-  const candidate = races
+  const candidates = races
     .filter((race) => race.raceDate === localTodayIso() && race.status === "OFFICIAL" && !resultKeys.has(race.raceKey))
     .filter((race) => {
       const start = raceStartEpoch(race);
       return start != null && start + 3 * 60 * 1000 <= now;
     })
-    .sort((a,b) => (raceStartEpoch(b) ?? 0) - (raceStartEpoch(a) ?? 0))[0];
+    .sort((a,b) => (raceStartEpoch(b) ?? 0) - (raceStartEpoch(a) ?? 0));
 
-  if (!candidate) return;
-  try { await refreshOfficialRaceResult(candidate); } catch {}
+  for (const candidate of candidates.slice(0, 4)) {
+    try {
+      await refreshOfficialRaceResult(candidate);
+      break;
+    } catch {}
+  }
 }
 
 async function refreshOneUpcomingOdds() {
@@ -94,7 +99,8 @@ export function syncLiveCache() {
   syncPromise = (async () => {
     await refreshWeekIfDue();
     await refreshDueRaceStates().catch(() => undefined);
-    // Keep network work bounded: at most one result and one odds refresh per sweep.
+    await refreshTodayVenueConditions().catch(() => undefined);
+    // Keep network work bounded: at most one successful result and one odds refresh per sweep.
     await refreshOnePendingResult();
     await refreshOneUpcomingOdds();
   })().finally(() => { syncPromise = null; });
