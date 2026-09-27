@@ -54,7 +54,7 @@ assert.ok(
 
 
 for (const token of [
-  "listRacingWeekRaces",
+  "listRaceNavigationGroup",
   "meetingSwitcherOpen",
   "meetingSwitchOptions",
   'candidate.scheduleStatus !== "ACTIVE"',
@@ -117,6 +117,21 @@ assert.ok(
 assert.ok(
   race.includes("venueSnapshot.sourceObservedDate === race.raceDate"),
   "race detail must not treat a stale venue snapshot as current conditions",
+);
+
+assert.ok(
+  week.includes("listStoredRaceWeeks") &&
+  week.includes('selectedWeekKey === "CURRENT"') &&
+  week.includes('setSelectedWeekKey("CURRENT")') &&
+  week.includes("archiveWeekLabel") &&
+  week.includes('"保存済み"') &&
+  week.includes("listRacesForDates(selectedWeek.dates)"),
+  "week screen must browse stored race weeks without creating a separate archive UI",
+);
+assert.ok(
+  race.includes("listRaceNavigationGroup(nextRace.raceDate)") &&
+  !race.includes("listRacingWeekRaces()"),
+  "race meeting switcher must stay inside the current or archived race week",
 );
 
 console.log("LIVE UI contract: PASS");
