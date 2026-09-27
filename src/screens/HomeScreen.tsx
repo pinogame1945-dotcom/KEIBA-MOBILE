@@ -43,6 +43,12 @@ function raceDateShort(iso: string) {
   return `${m}/${d}(${WEEKDAY[date.getDay()]})`;
 }
 
+function localTimeLabel(iso: string) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "--:--";
+  return String(date.getHours()).padStart(2,"0") + ":" + String(date.getMinutes()).padStart(2,"0");
+}
+
 function localClock(iso: string) {
   const date = new Date(iso);
   if (!Number.isFinite(date.getTime())) return "--:--";
