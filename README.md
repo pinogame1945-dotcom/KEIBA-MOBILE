@@ -1,37 +1,40 @@
 # KEIBA-MOBILE
 
-実戦専用の競馬スマホアプリ。
+競馬当日の実戦専用Androidアプリ。
 
-## 役割
+## LIVE CORE v1
 
-KEIBA-MOBILE は研究所ではなく、当日の競馬で使う実戦端末に限定する。
+- 今日のJRA開催 / レース一覧
+- 正式馬番付き出馬表
+- 馬場・天候・発走時刻変更
+- 出走取消 / 除外のお知らせ
+- 出走馬の基本情報
+- JRA LIVEオッズ（単勝・複勝・枠連・馬連・ワイド・馬単・3連複・3連単）
+- オッズ取得時刻の保持
+- 当日専用SQLite
 
-### 残す
-- お知らせ（馬場変更・天候・出走取消など）
-- 今日のレース / 出走表
-- 馬の基本情報
-- 最新オッズ取得
-- 正式モデルによる予想
-- 買い目 / 資金配分
-- レース結果
+初回は「今日のレース」を開くとJRA開催日程を取得する。正式出馬表が公開済みなら検証後に保存する。
+アプリ起動中は期限が来た正式出馬表だけを差分更新し、前回正式状態との差をお知らせへ記録する。
 
-### 持ち込まない
-- L1/L2/L3 の研究UI
-- 虫作成・編集
-- 年代ロック検証
-- Arena / 大量検証
-- Snapshot研究管理
-- 100年INDEX管理
-- Backfill管理
-- 旧研究契約・旧研究テスト
+## 境界
 
-研究・大量検証は GitHub 側へ分離し、KEIBA-MOBILE は確定済みロジックと必要な当日データだけを扱う。
+KEIBA-MOBILE は研究所ではない。L1/L2/L3研究、虫、Arena、年代検証、100年INDEX、Backfill管理は持ち込まない。
+正式モデルの推論接続はLIVE CORE安定後に行う。
 
-## 開発方針
+## Android
 
-- 旧 KEIBA-DATA-CORE から丸ごとコピーしない
-- 必要な機能だけ移植する
-- 新しい依存関係は最小限にする
-- Android package は旧版と並行導入できる別IDから開始する
-- GitHub Actions は public repository の標準 runner のみを使用する
-- 有料 runner / GPU / 課金対象ストレージ等が必要になった場合は実行前に停止する
+Android package:
+
+`com.pinogame.keibamobile`
+
+ローカル実機ビルド:
+
+`npm run android`
+
+CIではAPKを生成せず、`expo export --platform android` によるAndroid bundle smokeまで行う。
+これによりTypeScriptだけでなくMetroの依存解決・Android向けbundle生成も検証する。
+
+## コスト
+
+GitHub Actionsはpublic repositoryの標準 `ubuntu-latest` のみ使用する。
+有料runner / GPU / 課金対象ストレージ等は使用しない。
