@@ -12,6 +12,8 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      CI: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -19,7 +21,13 @@ jobs:
           node-version: "22.13.1"
       - name: Install dependencies
         run: npm install --no-audit --no-fund
+      - name: Foundation contract
+        run: npm run foundation:contract
       - name: Typecheck
         run: npm run typecheck
+      - name: Expo config smoke
+        run: npm run expo:config:smoke
       - name: Android bundle smoke
         run: npm run android:smoke
+      - name: Android native prebuild smoke
+        run: npm run android:prebuild:smoke

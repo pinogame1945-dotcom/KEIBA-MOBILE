@@ -16,11 +16,6 @@
 初回は「今日のレース」を開くとJRA開催日程を取得する。正式出馬表が公開済みなら検証後に保存する。
 アプリ起動中は期限が来た正式出馬表だけを差分更新し、前回正式状態との差をお知らせへ記録する。
 
-## 境界
-
-KEIBA-MOBILE は研究所ではない。L1/L2/L3研究、虫、Arena、年代検証、100年INDEX、Backfill管理は持ち込まない。
-正式モデルの推論接続はLIVE CORE安定後に行う。
-
 ## Android
 
 Android package:
@@ -31,8 +26,18 @@ Android package:
 
 `npm run android`
 
-CIではAPKを生成せず、`expo export --platform android` によるAndroid bundle smokeまで行う。
-これによりTypeScriptだけでなくMetroの依存解決・Android向けbundle生成も検証する。
+通常CIではAPKを生成せず、以下まで確認する。
+
+- Foundation contract
+- Typecheck
+- Expo config
+- Android bundle
+- Android native prebuild
+
+これにより、APKを焼く前にTypeScript、Metro依存解決、Expo設定、native Android project生成までを検証する。
+
+契約方針は `docs/FOUNDATION_CONTRACT.md` を参照。
+内部関数名やファイル配置を固定する契約は禁止し、将来の機能追加だけでCIが壊れないようにする。
 
 ## コスト
 
