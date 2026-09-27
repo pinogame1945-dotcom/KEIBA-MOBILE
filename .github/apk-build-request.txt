@@ -1,2 +1,2 @@
-APK build requested from a6d06455ac39f10a5f6adf1ed21c72d362ab4a1e
-Requested after result-condition recovery v2 on 2026-09-27
+APK build requested from 7dec2aaadefb84eebc77a864f4e6649148a8199b
+Requested after compact meeting switcher and JRA result-condition fix on 2026-09-27
