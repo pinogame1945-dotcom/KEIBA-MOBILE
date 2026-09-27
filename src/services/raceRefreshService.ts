@@ -7,13 +7,13 @@ import {
 import { parseJraRaceIdentity } from "../data/jra/raceHeaderParser";
 import { calendarDayUrl, parseCalendarDay } from "../data/jra/scheduleParser";
 import {
-  listTodayRaces, localTodayIso, saveOfficialCard, saveOfficialMeeting, saveScheduleMeetings,
+  listTodayRaces, localTodayIso, racingWeekCandidateDates, saveOfficialCard, saveOfficialMeeting, saveScheduleMeetings,
 } from "../repositories/liveRepository";
 import { raceStartEpoch } from "../data/jra/oddsAvailability";
 
 const HOME = "https://www.jra.go.jp/";
 const THIS_WEEK = "https://www.jra.go.jp/keiba/thisweek/";
-const MAX_CARD_PAGES = 80;
+const MAX_CARD_PAGES = 120;
 
 export type RaceRefreshProgress = {
   phase: "SCHEDULE" | "DISCOVERY" | "CARDS" | "DONE";
@@ -54,7 +54,7 @@ async function discoverSeeds(meetings: ScheduleMeeting[], onProgress?: (p: RaceR
   const weekly = await scanPage(THIS_WEEK);
   const features = weekly.features.filter((url) =>
     url.includes("/keiba/race/") || url.includes("/keiba/g1/")
-  ).slice(0, 12);
+  ).slice(0, 16);
 
   for (let i = 0; i < features.length && seeds.size < meetings.length; i += 1) {
     onProgress?.({ phase: "DISCOVERY", message: "正式出馬表リンクを探索", current: i + 1, total: features.length });
@@ -66,7 +66,7 @@ async function discoverSeeds(meetings: ScheduleMeeting[], onProgress?: (p: RaceR
       const home = await scanPage(HOME);
       const homeFeatures = home.features.filter((url) =>
         url.includes("/keiba/race/") || url.includes("/keiba/g1/")
-      ).slice(0, 8);
+      ).slice(0, 10);
       for (const url of homeFeatures) {
         if (seeds.size >= meetings.length) break;
         try { await scanPage(url); } catch {}
@@ -76,19 +76,47 @@ async function discoverSeeds(meetings: ScheduleMeeting[], onProgress?: (p: RaceR
   return [...seeds];
 }
 
-export async function refreshTodayRaceData(onProgress?: (p: RaceRefreshProgress) => void) {
-  const today = localTodayIso();
-  const scheduleUrl = calendarDayUrl(today);
-  onProgress?.({ phase: "SCHEDULE", message: "今日の開催を確認", current: 0, total: 1 });
-  const scheduleHtml = await fetchJraHtml(scheduleUrl);
-  const meetings = parseCalendarDay(scheduleHtml, scheduleUrl);
-  await saveScheduleMeetings(meetings);
+async function refreshRaceDates(
+  dates: string[],
+  onProgress?: (p: RaceRefreshProgress) => void,
+) {
+  const meetings: ScheduleMeeting[] = [];
+  for (let i = 0; i < dates.length; i += 1) {
+    const date = dates[i];
+    onProgress?.({
+      phase: "SCHEDULE",
+      message: "開催日程を確認 " + date,
+      current: i + 1,
+      total: dates.length,
+    });
+    try {
+      const scheduleUrl = calendarDayUrl(date);
+      const scheduleHtml = await fetchJraHtml(scheduleUrl);
+      const parsed = parseCalendarDay(scheduleHtml, scheduleUrl);
+      if (parsed.length) {
+        meetings.push(...parsed);
+        await saveScheduleMeetings(parsed);
+      }
+    } catch {
+      // 非開催日や一時的な日程ページ欠落は他の日を止めない。
+    }
+  }
+
+  if (!meetings.length) {
+    onProgress?.({ phase: "DONE", message: "対象期間のJRA開催なし", current: 0, total: 0 });
+    return { meetings: 0, officialSaved: 0, pendingMeetings: 0 };
+  }
 
   let seeds: string[] = [];
   try {
     seeds = await discoverSeeds(meetings, onProgress);
   } catch {
-    onProgress?.({ phase: "DONE", message: "開催日程取得済み・正式出馬表の公開待ち", current: 0, total: meetings.length });
+    onProgress?.({
+      phase: "DONE",
+      message: "開催日程取得済み・正式出馬表の公開待ち",
+      current: 0,
+      total: meetings.length,
+    });
     return { meetings: meetings.length, officialSaved: 0, pendingMeetings: meetings.length };
   }
 
@@ -102,7 +130,12 @@ export async function refreshTodayRaceData(onProgress?: (p: RaceRefreshProgress)
     const url = queue.shift()!;
     if (visited.has(url)) continue;
     visited.add(url);
-    onProgress?.({ phase: "CARDS", message: "正式出馬表を検証", current: visited.size, total: Math.max(queued.size, 1) });
+    onProgress?.({
+      phase: "CARDS",
+      message: "正式出馬表を検証",
+      current: visited.size,
+      total: Math.max(queued.size, 1),
+    });
 
     let html: string;
     try { html = await fetchJraHtml(url); } catch { continue; }
@@ -168,6 +201,14 @@ export async function refreshTodayRaceData(onProgress?: (p: RaceRefreshProgress)
     total: meetings.length,
   });
   return { meetings: meetings.length, officialSaved, pendingMeetings };
+}
+
+export function refreshTodayRaceData(onProgress?: (p: RaceRefreshProgress) => void) {
+  return refreshRaceDates([localTodayIso()], onProgress);
+}
+
+export function refreshCurrentWeekRaceData(onProgress?: (p: RaceRefreshProgress) => void) {
+  return refreshRaceDates(racingWeekCandidateDates(), onProgress);
 }
 
 export async function refreshRaceState(race: JraRace) {
