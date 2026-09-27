@@ -59,8 +59,8 @@ export function TodayRacesScreen({ onBack }: Props) {
     return (
       <RaceCardScreen
         raceKey={selectedRaceKey}
-        onBack={() => { setSelectedRaceKey(null); void load(); }}
-        onRefreshAll={refresh}
+        onOpenWeek={() => { setSelectedRaceKey(null); void load(); }}
+        onOpenRace={(nextRaceKey) => setSelectedRaceKey(nextRaceKey)}
       />
     );
   }
