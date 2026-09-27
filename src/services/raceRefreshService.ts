@@ -33,9 +33,33 @@ function targetMeeting(identity:ReturnType<typeof parseJraRaceIdentity>,meetings
     Number(meeting.raceDate.slice(0,4))===identity.year&&
     meeting.venue===identity.venue&&
     meeting.meetingNo===identity.meetingNo&&
-    meeting.meetingDay===identity.meetingDay
+    meeting.meetingDay===identity.meetingDay&&
+    meeting.races.some(race=>race.raceNo===identity.raceNo)
   )??null;
 }
+function activeFetchTarget(target:ScheduleTarget):ScheduleTarget{
+  const cancelledMeetings=new Set(
+    (target.disruptions??[])
+      .filter(item=>item.scope==="MEETING"&&(item.kind==="CANCELLED"||item.kind==="ABANDONED"))
+      .map(item=>item.raceDate+"|"+item.venue),
+  );
+  const cancelledRaces=new Set(
+    (target.disruptions??[])
+      .filter(item=>item.scope==="RACE"&&item.raceNo!=null&&(item.kind==="CANCELLED"||item.kind==="ABANDONED"))
+      .map(item=>item.raceDate+"|"+item.venue+"|"+item.raceNo),
+  );
+  return {
+    ...target,
+    meetings:target.meetings
+      .filter(meeting=>!cancelledMeetings.has(meeting.raceDate+"|"+meeting.venue))
+      .map(meeting=>({
+        ...meeting,
+        races:meeting.races.filter(race=>!cancelledRaces.has(race.raceDate+"|"+race.venue+"|"+race.raceNo)),
+      }))
+      .filter(meeting=>meeting.races.length>0),
+  };
+}
+
 function metadata(url:string){
   const identity=parseJraRaceIdentity(url);
   return identity
@@ -188,28 +212,32 @@ export function refreshCurrentWeekRaceData(
     onProgress?.({phase:"SCHEDULE",message:"開催日程を確認",current:0,total:1});
     const target=await refreshScheduleTarget(false);
     await onMutation?.();
+    const fetchTarget=activeFetchTarget(target);
+    if(!fetchTarget.meetings.length){
+      return {meetings:0,officialSaved:0,pendingMeetings:0};
+    }
 
-    await prepareRaceFetchRun(target.fingerprint);
+    await prepareRaceFetchRun(fetchTarget.fingerprint);
     try{
       let stats=await getRaceFetchStats();
       const actionable=stats.pending+stats.fetching+stats.retry+stats.failed;
       if(stats.total===0||actionable===0){
-        const seeds=await discoverSeeds(target.meetings,onProgress);
+        const seeds=await discoverSeeds(fetchTarget.meetings,onProgress);
         for(const url of seeds){
           await enqueueRaceFetchUrl({url,targetFingerprint:target.fingerprint,...metadata(url)});
         }
         stats=await getRaceFetchStats();
         if(!seeds.length&&stats.pending+stats.retry+stats.fetching===0){
           await finishRaceFetchRun("PARTIAL","正式出馬表入口をまだ発見できない");
-          return {meetings:target.meetings.length,officialSaved:0,pendingMeetings:target.meetings.length};
+          return {meetings:fetchTarget.meetings.length,officialSaved:0,pendingMeetings:fetchTarget.meetings.length};
         }
       }
 
-      const discovery=await drainQueue(target,onProgress,onMutation);
+      const discovery=await drainQueue(fetchTarget,onProgress,onMutation);
       let officialSaved=discovery.savedCards;
       let pendingMeetings=0;
 
-      for(const meeting of target.meetings){
+      for(const meeting of fetchTarget.meetings){
         const key=meetingKey(meeting.venue,meeting.meetingNo,meeting.meetingDay);
         const expected=authoritativeRaceNos(meeting,discovery.navigation);
         const persisted=(await listOfficialRacesForDates([meeting.raceDate]))
@@ -256,10 +284,10 @@ export function refreshCurrentWeekRaceData(
         message:partial
           ?officialSaved+"R更新 / "+pendingMeetings+"開催保留"
           :officialSaved+"Rの正式出馬表を更新",
-        current:target.meetings.length-pendingMeetings,
-        total:target.meetings.length,
+        current:fetchTarget.meetings.length-pendingMeetings,
+        total:fetchTarget.meetings.length,
       });
-      return {meetings:target.meetings.length,officialSaved,pendingMeetings};
+      return {meetings:fetchTarget.meetings.length,officialSaved,pendingMeetings};
     }catch(error){
       await finishRaceFetchRun(
         "FAILED",
@@ -289,6 +317,8 @@ async function resolveSingleSource(race:JraRace){
 }
 
 export async function refreshRaceState(race:JraRace){
+  if(race.scheduleStatus!=="ACTIVE")throw new Error("順延前の日程は更新しない");
+  if(race.raceStatus==="CANCELLED"||race.raceStatus==="ABANDONED")throw new Error("中止・取りやめレースは更新しない");
   const sourceUrl=await resolveSingleSource(race);
   if(!sourceUrl)throw new Error("このレースの正式出馬表URLをまだ発見できない");
   const html=await fetchJraHtml(sourceUrl);
@@ -301,7 +331,8 @@ function knownInterval(race:JraRace,now:number){
   const start=raceStartEpoch(race);
   if(start==null)return 30*60*1000;
   const remaining=start-now;
-  if(remaining<=0)return Number.POSITIVE_INFINITY;
+  if(remaining<=-3*60*60*1000)return Number.POSITIVE_INFINITY;
+  if(remaining<=0)return 5*60*1000;
   if(remaining<=60*60*1000)return 3*60*1000;
   if(remaining<=3*60*60*1000)return 10*60*1000;
   return 30*60*1000;
@@ -317,10 +348,10 @@ export function refreshKnownRaceStates(onMutation?:()=>void|Promise<void>){
     const races=await listOfficialRacesForDates(target.dates);
     const candidates=races
       .filter(race=>{
-        const start=raceStartEpoch(race);
-        if(start!=null&&start<=now)return false;
+        const interval=knownInterval(race,now);
+        if(!Number.isFinite(interval))return false;
         const fetched=Date.parse(race.fetchedAt);
-        return !Number.isFinite(fetched)||now-fetched>=knownInterval(race,now);
+        return !Number.isFinite(fetched)||now-fetched>=interval;
       })
       .sort((a,b)=>(raceStartEpoch(a)??Infinity)-(raceStartEpoch(b)??Infinity));
 
