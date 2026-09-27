@@ -115,7 +115,9 @@ async function writeOfficialCard(db: Awaited<ReturnType<typeof getLiveDb>>, card
       canonical_race_id=COALESCE(excluded.canonical_race_id,races.canonical_race_id),
       race_name=excluded.race_name,race_class=excluded.race_class,start_time=excluded.start_time,
       discipline=excluded.discipline,surface=excluded.surface,distance_m=excluded.distance_m,
-      direction=excluded.direction,weather=excluded.weather,track_condition=excluded.track_condition,
+      direction=excluded.direction,
+      weather=COALESCE(excluded.weather,races.weather),
+      track_condition=COALESCE(excluded.track_condition,races.track_condition),
       source_url=excluded.source_url,fetched_at=excluded.fetched_at,status='OFFICIAL'`,
     r.raceKey, r.canonicalRaceId, r.raceDate, r.venue, r.raceNo, r.raceName, r.raceClass, r.startTime,
     r.discipline, r.surface, r.distanceM, r.direction, r.weather, r.trackCondition, r.sourceUrl, r.fetchedAt,
@@ -358,7 +360,7 @@ export async function getRaceResults(raceKey: string) {
   return db.getAllAsync<JraRaceResult>(
     `SELECT race_key AS raceKey,finish_position AS finishPosition,finish_raw AS finishRaw,
       horse_no AS horseNo,horse_name AS horseName,finish_time AS finishTime,margin,last_3f AS last3f,
-      popularity,result_status AS resultStatus
+      average_1f AS average1f,popularity,result_status AS resultStatus
      FROM race_results WHERE race_key=?
      ORDER BY CASE WHEN finish_position IS NULL THEN 999 ELSE finish_position END,horse_no`,
     raceKey,
@@ -392,23 +394,70 @@ export async function listRaceKeysWithResults(dates: string[]) {
   return rows.map((row) => row.raceKey);
 }
 
+export type OfficialRaceConditions = {
+  weather: string | null;
+  turfCondition: string | null;
+  dirtCondition: string | null;
+};
+
+function conditionForRace(race: JraRace, conditions: OfficialRaceConditions) {
+  if (race.discipline === "OBSTACLE" || race.surface === "MIXED") {
+    if (conditions.turfCondition && conditions.dirtCondition && conditions.turfCondition !== conditions.dirtCondition) {
+      return `芝${conditions.turfCondition} / ダ${conditions.dirtCondition}`;
+    }
+    return conditions.turfCondition ?? conditions.dirtCondition;
+  }
+  return race.surface === "DIRT" ? conditions.dirtCondition : conditions.turfCondition;
+}
+
+export async function applyVenueConditions(
+  raceDate: string,
+  venue: string,
+  conditions: OfficialRaceConditions,
+) {
+  const db = await getLiveDb();
+  const races = await db.getAllAsync<JraRace>(
+    `SELECT ${raceSelect()} FROM races WHERE race_date=? AND venue=? AND status='OFFICIAL' ORDER BY race_no`,
+    raceDate, venue,
+  );
+  if (!races.length) return 0;
+  await db.withTransactionAsync(async () => {
+    for (const race of races) {
+      const nextWeather = conditions.weather;
+      const nextTrack = conditionForRace(race, conditions);
+      if (race.weather != null && nextWeather != null && race.weather !== nextWeather) {
+        await insertNotice(db, race, "WEATHER_CHANGED", race.weather, nextWeather);
+      }
+      if (race.trackCondition != null && nextTrack != null && race.trackCondition !== nextTrack) {
+        await insertNotice(db, race, "TRACK_CHANGED", race.trackCondition, nextTrack);
+      }
+      await db.runAsync(
+        `UPDATE races SET weather=COALESCE(?,weather),track_condition=COALESCE(?,track_condition) WHERE race_key=?`,
+        nextWeather,nextTrack,race.raceKey,
+      );
+    }
+  });
+  return races.length;
+}
+
 export async function saveOfficialRaceResult(
-  raceKey: string,
+  race: JraRace,
   results: JraRaceResult[],
   payouts: JraPayout[],
+  conditions?: OfficialRaceConditions,
 ) {
   if (!results.length) throw new Error("公式結果が空のため保存しない");
   const db = await getLiveDb();
   const observedAt = new Date().toISOString();
   await db.withTransactionAsync(async () => {
-    await db.runAsync("DELETE FROM race_results WHERE race_key=?", raceKey);
-    await db.runAsync("DELETE FROM payouts WHERE race_key=?", raceKey);
+    await db.runAsync("DELETE FROM race_results WHERE race_key=?", race.raceKey);
+    await db.runAsync("DELETE FROM payouts WHERE race_key=?", race.raceKey);
     for (const row of results) {
       await db.runAsync(
         `INSERT INTO race_results(
-          race_key,finish_position,finish_raw,horse_no,horse_name,finish_time,margin,last_3f,popularity,result_status,observed_at
-        ) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
-        raceKey,row.finishPosition,row.finishRaw,row.horseNo,row.horseName,row.finishTime,row.margin,row.last3f,
+          race_key,finish_position,finish_raw,horse_no,horse_name,finish_time,margin,last_3f,average_1f,popularity,result_status,observed_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+        race.raceKey,row.finishPosition,row.finishRaw,row.horseNo,row.horseName,row.finishTime,row.margin,row.last3f,row.average1f,
         row.popularity,row.resultStatus,observedAt,
       );
     }
@@ -416,7 +465,14 @@ export async function saveOfficialRaceResult(
       await db.runAsync(
         `INSERT INTO payouts(race_key,bet_type,selection,payout_yen,popularity,observed_at)
          VALUES(?,?,?,?,?,?)`,
-        raceKey,row.betType,row.selection,row.payoutYen,row.popularity,observedAt,
+        race.raceKey,row.betType,row.selection,row.payoutYen,row.popularity,observedAt,
+      );
+    }
+    if (conditions) {
+      const nextTrack = conditionForRace(race, conditions);
+      await db.runAsync(
+        `UPDATE races SET weather=COALESCE(?,weather),track_condition=COALESCE(?,track_condition) WHERE race_key=?`,
+        conditions.weather,nextTrack,race.raceKey,
       );
     }
   });
