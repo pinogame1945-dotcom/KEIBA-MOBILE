@@ -110,7 +110,11 @@ function authoritativeRaceNos(meeting:ScheduleMeeting,navigation:NavigationEvide
   return null;
 }
 
-async function drainQueue(target:ScheduleTarget,onProgress?:(p:RaceRefreshProgress)=>void){
+async function drainQueue(
+  target:ScheduleTarget,
+  onProgress?:(p:RaceRefreshProgress)=>void,
+  onMutation?:()=>void|Promise<void>,
+){
   const cards:CandidateMeetings=new Map();
   const navigation:NavigationEvidence=new Map();
   let processed=0;
@@ -153,6 +157,10 @@ async function drainQueue(target:ScheduleTarget,onProgress?:(p:RaceRefreshProgre
           const group=cards.get(key)??new Map<number,JraRaceCard>();
           group.set(card.race.raceNo,card);
           cards.set(key,group);
+          // A verified card is safe to expose immediately. The schedule target keeps
+          // the rest of the meeting visible while the full meeting is still collecting.
+          await saveOfficialCard(card);
+          await onMutation?.();
           await markRaceFetchDone(item.url);
         }catch(error){
           await markRaceFetchFailed(item.url,item.attempts,error);
@@ -193,7 +201,7 @@ export function refreshCurrentWeekRaceData(
         }
       }
 
-      const discovery=await drainQueue(target,onProgress);
+      const discovery=await drainQueue(target,onProgress,onMutation);
       let officialSaved=0;
       let pendingMeetings=0;
 
