@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "name": "KEIBA MOBILE",
+    "slug": "keiba-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "android": {
+      "package": "com.pinogame.keibamobile"
+    }
+  }
+}
