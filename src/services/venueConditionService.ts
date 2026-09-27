@@ -40,6 +40,9 @@ export function refreshTodayVenueConditions(force=false){
         if(!url)continue;
         const html=url===BASE?baseHtml:await fetchJraHtml(url);
         const snapshot=parseVenueConditionPage(html,venue,url);
+        if(snapshot.raceDate&&snapshot.raceDate!==today){
+          throw new Error("JRA馬場情報の日付が対象開催日と一致しない");
+        }
         await saveVenueConditionSnapshot({
           raceDate:today,
           venue,

@@ -29,6 +29,8 @@ jobs:
         run: npm run live-ui:contract
       - name: JRA entry runtime regression
         run: npm run smoke:jra:entry
+      - name: JRA venue runtime regression
+        run: npm run smoke:jra:venue
       - name: Typecheck
         run: npm run typecheck
       - name: Expo config smoke

@@ -113,6 +113,7 @@ export default function App() {
                     onBack={goBack}
                     onOpenWeek={openWeek}
                     onOpenRace={openRace}
+                    onMutation={bumpCache}
                   />
                 )}
               </View>

@@ -1,5 +1,5 @@
 import { load } from "cheerio";
-import { absoluteJraUrl } from "./http";
+import { absoluteJraUrl } from "./http.ts";
 
 export type VenueConditionSnapshot = {
   venue: string;
@@ -52,20 +52,27 @@ export function parseVenueConditionPage(
   const start = pageText.indexOf("馬場状態");
   if (start < 0) throw new Error("JRA馬場情報の現況を確認できない");
 
-  const endCandidates = ["芝のクッション値", "週間情報", "馬場状態に関する基礎知識"]
+  // The current JRA page places a "馬場状態に関する基礎知識" link immediately
+  // after the heading and before the actual weather/track values. Treating that link
+  // as the end marker produced a successful-but-empty snapshot.
+  const endCandidates = ["芝のクッション値", "週間情報"]
     .map((token) => pageText.indexOf(token, start + 4))
     .filter((index) => index > start);
   const end = endCandidates.length ? Math.min(...endCandidates) : Math.min(pageText.length, start + 800);
   const block = pageText.slice(start, end);
   const headingWindow = pageText.slice(Math.max(0, start - 220), start + 40);
 
-  return {
+  const parsed = {
     venue,
     raceDate: isoDate(headingWindow),
-    observedLabel: block.match(/馬場状態（([^）]+現在)）/)?.[1] ?? null,
+    observedLabel: block.match(/馬場状態（(.+?現在)）/)?.[1] ?? null,
     weather: block.match(/天候[：:]?\s*(晴|曇|雨|小雨|雪|小雪)/)?.[1] ?? null,
     turfCondition: block.match(/芝\s*(良|稍重|重|不良)/)?.[1] ?? null,
     dirtCondition: block.match(/ダート\s*(良|稍重|重|不良)/)?.[1] ?? null,
     sourceUrl,
   };
+  if (!parsed.weather && !parsed.turfCondition && !parsed.dirtCondition) {
+    throw new Error("JRA馬場情報の天候・芝・ダート状態を取得できない");
+  }
+  return parsed;
 }

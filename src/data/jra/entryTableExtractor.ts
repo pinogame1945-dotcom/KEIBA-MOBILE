@@ -177,7 +177,7 @@ export function extractOfficialEntryRows(html:string):ExtractedOfficialEntryRow[
     if(!name||/^(?:馬名|父|母)$/.test(name))continue;
     const gateCell=row[gateIdx],horseNoCell=row[horseNoIdx];
     const gate=boundedInt(gateCell?.text,1,8)??embeddedInt(gateCell?.imageText??[],1,8);
-    const no=boundedInt(horseNoCell?.text,1,18);
+    const no=boundedInt(horseNoCell?.text,1,18)??embeddedInt(horseNoCell?.imageText??[],1,18);
     const jockeyCell=jockeyIdx>=0?row[jockeyIdx]:undefined;
     const trainerCell=trainerIdx>=0?row[trainerIdx]:undefined;
     const rowLinks=[...new Set(row.filter(Boolean).flatMap(cell=>cell.links))];

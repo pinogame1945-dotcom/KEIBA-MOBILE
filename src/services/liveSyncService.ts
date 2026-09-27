@@ -1,4 +1,4 @@
-import { raceStartEpoch } from "../data/jra/oddsAvailability";
+import { ODDS_FINAL_DELAY_MS, raceStartEpoch } from "../data/jra/oddsAvailability";
 import {
   getOddsAvailability,getRace,getRaceResultCompleteness,getWeekEntries,getWeekMeta,
   listRacingWeekRaces,localTodayIso,setWeekMeta,
@@ -55,7 +55,7 @@ async function refreshCardLayer(onMutation?:()=>void){
     await refreshKnownRaceStates(onMutation);
   }
 }
-async function refreshOneIncompleteResult(onMutation?:()=>void){
+async function refreshIncompleteResults(onMutation?:()=>void){
   const races=await listRacingWeekRaces();
   const now=Date.now();
   const candidates=races
@@ -65,34 +65,53 @@ async function refreshOneIncompleteResult(onMutation?:()=>void){
       return start!=null&&start+15*60*1000<=now;
     })
     .sort((a,b)=>(raceStartEpoch(b)??0)-(raceStartEpoch(a)??0));
-  for(const race of candidates.slice(0,12)){
+  let refreshed=0;
+  for(const race of candidates.slice(0,16)){
     const completeness=await getRaceResultCompleteness(race.raceKey);
     if(completeness.complete)continue;
     try{
       await refreshOfficialRaceResult(race);
       onMutation?.();
-      break;
+      refreshed+=1;
+      if(refreshed>=4)break;
     }catch{}
   }
 }
-async function refreshOneUpcomingOdds(){
+async function refreshDueOdds(){
   const races=await listRacingWeekRaces();
   const now=Date.now(),today=localTodayIso();
   const candidates=races
     .filter(race=>race.raceDate===today&&race.status==="OFFICIAL")
     .map(race=>({race,start:raceStartEpoch(race)}))
     .filter((item):item is {race:typeof races[number];start:number}=>
-      item.start!=null&&item.start>now&&item.start-now<=3*60*60*1000
+      item.start!=null&&(
+        (item.start>now&&item.start-now<=3*60*60*1000)||
+        now>=item.start+ODDS_FINAL_DELAY_MS
+      )
     )
-    .sort((a,b)=>a.start-b.start);
+    .sort((a,b)=>{
+      const aFinal=now>=a.start+ODDS_FINAL_DELAY_MS;
+      const bFinal=now>=b.start+ODDS_FINAL_DELAY_MS;
+      if(aFinal!==bFinal)return aFinal?-1:1;
+      return a.start-b.start;
+    });
+  let refreshed=0;
   for(const {race,start} of candidates){
     const last=await latestOddsAt(race.raceKey);
-    if(last&&now-last<oddsRefreshInterval(start-now))continue;
+    const finalDue=now>=start+ODDS_FINAL_DELAY_MS;
+    if(finalDue){
+      if(last>=start+ODDS_FINAL_DELAY_MS)continue;
+    }else if(last&&now-last<oddsRefreshInterval(start-now)){
+      continue;
+    }
     try{
       const entries=await getWeekEntries(race.raceKey);
-      if(entries.length)await refreshLatestOdds(race,entries);
+      if(entries.length){
+        await refreshLatestOdds(race,entries);
+        refreshed+=1;
+      }
     }catch{}
-    break;
+    if(refreshed>=2)break;
   }
 }
 
@@ -103,8 +122,8 @@ export function syncLiveCache(onMutation?:()=>void){
     await Promise.allSettled([
       refreshTodayVenueConditions().then(()=>onMutation?.()),
       refreshCardLayer(onMutation),
-      refreshOneIncompleteResult(onMutation),
-      refreshOneUpcomingOdds(),
+      refreshIncompleteResults(onMutation),
+      refreshDueOdds(),
     ]);
   })().finally(()=>{syncPromise=null;});
   return syncPromise;
@@ -121,8 +140,19 @@ export function warmRaceData(raceKey:string,onMutation?:()=>void){
 
     if(start!=null&&start+15*60*1000<=now){
       const completeness=await getRaceResultCompleteness(raceKey);
+      const repairs:Promise<unknown>[]=[];
+      if(race.status!=="OFFICIAL"){
+        repairs.push(refreshRaceState(race).then(()=>onMutation?.()));
+      }
       if(!completeness.complete){
-        await refreshOfficialRaceResult(race).then(()=>onMutation?.()).catch(()=>undefined);
+        repairs.push(refreshOfficialRaceResult(race).then(()=>onMutation?.()));
+      }
+      await Promise.allSettled(repairs);
+      race=await getRace(raceKey)??race;
+      const entries=await getWeekEntries(raceKey);
+      const lastOdds=await latestOddsAt(raceKey);
+      if(race.status==="OFFICIAL"&&entries.length&&start!=null&&now>=start+ODDS_FINAL_DELAY_MS&&lastOdds<start+ODDS_FINAL_DELAY_MS){
+        await refreshLatestOdds(race,entries).then(()=>onMutation?.()).catch(()=>undefined);
       }
       return;
     }

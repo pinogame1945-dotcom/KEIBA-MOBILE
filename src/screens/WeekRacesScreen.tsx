@@ -144,8 +144,10 @@ export function WeekRacesScreen({
     .sort((a,b) => (raceStartEpoch(a) ?? Infinity) - (raceStartEpoch(b) ?? Infinity))[0]?.raceKey ?? null;
 
   const venueStatusRace = [...visible].reverse().find((race) => race.weather || race.trackCondition) ?? visible[0];
-  const snapshotCurrent = venueSnapshot?.sourceObservedDate === selectedDate;
-  const venueStatusText = snapshotCurrent && venueSnapshot
+  const snapshotUsable = Boolean(
+    venueSnapshot && (venueSnapshot.weather || venueSnapshot.turfCondition || venueSnapshot.dirtCondition),
+  );
+  const venueStatusText = snapshotUsable && venueSnapshot
     ? [
         venueSnapshot.weather ? "天候 " + venueSnapshot.weather : null,
         venueSnapshot.turfCondition ? "芝 " + venueSnapshot.turfCondition : null,
@@ -153,14 +155,14 @@ export function WeekRacesScreen({
       ].filter(Boolean).join(" / ")
     : venueStatusRace && (venueStatusRace.weather || venueStatusRace.trackCondition)
       ? [venueStatusRace.weather, venueStatusRace.trackCondition].filter(Boolean).join(" / ")
-      : venueSnapshot?.sourceObservedDate
-        ? "当日馬場未取得（" + venueSnapshot.sourceObservedDate.slice(5).replace("-","/") + "時点）"
+      : venueSnapshot
+        ? "馬場情報 再取得待ち"
         : "馬場情報 未取得";
-  const venueUpdatedAt = venueSnapshot?.fetchedAt ?? null;
+  const venueUpdatedAt = snapshotUsable ? venueSnapshot?.fetchedAt ?? null : null;
 
   const conditionForRace = (race: JraRace) => {
     if (race.weather || race.trackCondition) return [race.weather, race.trackCondition].filter(Boolean);
-    if (!snapshotCurrent || !venueSnapshot) return [];
+    if (!snapshotUsable || !venueSnapshot) return [];
     const track = race.discipline === "OBSTACLE" || race.surface === "MIXED"
       ? [venueSnapshot.turfCondition && "芝" + venueSnapshot.turfCondition,
           venueSnapshot.dirtCondition && "ダ" + venueSnapshot.dirtCondition].filter(Boolean).join(" / ")
@@ -232,7 +234,11 @@ export function WeekRacesScreen({
               </Text>
             </View>
             <Text style={styles.updated}>
-              {localClock(venueUpdatedAt) ? "馬場取得 " + localClock(venueUpdatedAt) : "馬場取得時刻なし"}
+              {localClock(venueUpdatedAt)
+                ? "馬場取得 " + localClock(venueUpdatedAt)
+                : venueStatusRace.weather || venueStatusRace.trackCondition
+                  ? "結果情報から取得"
+                  : "馬場取得時刻なし"}
             </Text>
           </View>
         ) : null}

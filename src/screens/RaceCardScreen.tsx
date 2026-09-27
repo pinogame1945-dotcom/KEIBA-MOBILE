@@ -6,7 +6,7 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import type {
   JraEntry, JraPayout, JraRace, JraRaceResult, OddsBetType, OddsRow, VenueConditionSnapshot,
 } from "../domain/live";
-import { raceStartEpoch } from "../data/jra/oddsAvailability";
+import { ODDS_FINAL_DELAY_MS, raceStartEpoch } from "../data/jra/oddsAvailability";
 import {
   getRace, getRacePayouts, getRaceResults, getVenueConditionSnapshot, getWeekEntries, listRacesForDates, localTodayIso,
 } from "../repositories/liveRepository";
@@ -25,6 +25,7 @@ type Props = {
   onBack?: () => void;
   active?: boolean;
   cacheRevision?: number;
+  onMutation?: () => void;
 };
 
 type RaceTab = "CARD" | "ODDS" | "INFO" | "RESULT";
@@ -148,6 +149,7 @@ export function RaceCardScreen({
   onBack,
   active = true,
   cacheRevision = 0,
+  onMutation,
 }: Props) {
   const [race, setRace] = useState<JraRace | null>(null);
   const [entries, setEntries] = useState<JraEntry[]>([]);
@@ -282,26 +284,33 @@ export function RaceCardScreen({
 
   useEffect(() => {
     if (!active || !race || race.status === "OFFICIAL" || busy || autoCardRepairRaceKey.current === race.raceKey) return;
-    const start = raceStartEpoch(race);
-    if (start != null && start <= Date.now()) return;
     autoCardRepairRaceKey.current = race.raceKey;
     setBusy("race");
     setError(null);
     void refreshRaceState(race)
-      .then(load)
+      .then(() => { onMutation?.(); return load(); })
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(null));
-  }, [active, race, busy, load]);
+  }, [active, race, busy, load, onMutation]);
 
   useEffect(() => {
     if (!active || !race || race.status !== "OFFICIAL" || !entries.length || autoOddsStarted.current) return;
     const start = raceStartEpoch(race);
-    if (start != null && start <= Date.now()) return;
+    const now = Date.now();
     const latestMs = latestObservedAt ? Date.parse(latestObservedAt) : 0;
-    if (Number.isFinite(latestMs) && Date.now() - latestMs < 5 * 60 * 1000) return;
+    const hasLatest = Number.isFinite(latestMs) && latestMs > 0;
+    const finalDue = start != null && now >= start + ODDS_FINAL_DELAY_MS;
+    if (start != null && start <= now && !finalDue) return;
+    if (finalDue && start != null) {
+      if (hasLatest && latestMs >= start + ODDS_FINAL_DELAY_MS) return;
+    } else if (hasLatest && now - latestMs < 5 * 60 * 1000) {
+      return;
+    }
     autoOddsStarted.current = true;
-    void refreshLatestOdds(race, entries).then(load).catch(() => undefined);
-  }, [race, entries, latestObservedAt, load]);
+    void refreshLatestOdds(race, entries)
+      .then(() => { onMutation?.(); return load(); })
+      .catch(() => undefined);
+  }, [active, race, entries, latestObservedAt, load, onMutation]);
 
   useEffect(() => {
     if (!active || raceTab !== "RESULT" || !race || results.length || busy || autoResultRaceKey.current === race.raceKey) return;
@@ -311,10 +320,10 @@ export function RaceCardScreen({
     setBusy("result");
     setError(null);
     void refreshOfficialRaceResult(race)
-      .then(load)
+      .then(() => { onMutation?.(); return load(); })
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(null));
-  }, [raceTab, race, results.length, busy, load]);
+  }, [raceTab, race, results.length, busy, load, onMutation]);
 
   const sortedEntries = useMemo(() => [...entries].sort((a,b) => {
     if (sortMode === "POPULARITY") return (a.popularity ?? 999) - (b.popularity ?? 999);
@@ -336,11 +345,12 @@ export function RaceCardScreen({
     let cardError: unknown = null;
     try {
       await refreshRaceState(race);
+      onMutation?.();
     } catch (e) {
       cardError = e;
     }
     if (race.raceDate === localTodayIso()) {
-      await refreshTodayVenueConditions(true).catch(() => undefined);
+      await refreshTodayVenueConditions(true).then(() => onMutation?.()).catch(() => undefined);
     }
     await load().catch(() => undefined);
     if (cardError) setError(cardError instanceof Error ? cardError.message : String(cardError));
@@ -353,6 +363,7 @@ export function RaceCardScreen({
     try {
       const result = await refreshLatestOdds(race, entries);
       if (result.missing.length) setError("一部オッズ未取得: " + result.missing.map(oddsBetTypeLabel).join("・"));
+      onMutation?.();
       await load();
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(null); }
@@ -363,6 +374,7 @@ export function RaceCardScreen({
     setBusy("result"); setError(null);
     try {
       await refreshOfficialRaceResult(race);
+      onMutation?.();
       await load();
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(null); }
@@ -420,8 +432,10 @@ export function RaceCardScreen({
 
   const status = raceStateLabel(race, results.length > 0);
   const isFuture = (raceStartEpoch(race) ?? Infinity) > Date.now();
-  const snapshotCurrent = venueSnapshot?.sourceObservedDate === race.raceDate;
-  const snapshotTrack = snapshotCurrent && venueSnapshot
+  const snapshotUsable = Boolean(
+    venueSnapshot && (venueSnapshot.weather || venueSnapshot.turfCondition || venueSnapshot.dirtCondition),
+  );
+  const snapshotTrack = snapshotUsable && venueSnapshot
     ? race.discipline === "OBSTACLE" || race.surface === "MIXED"
       ? [venueSnapshot.turfCondition && "芝" + venueSnapshot.turfCondition,
           venueSnapshot.dirtCondition && "ダ" + venueSnapshot.dirtCondition].filter(Boolean).join(" / ") || null
@@ -429,11 +443,9 @@ export function RaceCardScreen({
         ? venueSnapshot.dirtCondition
         : venueSnapshot.turfCondition
     : null;
-  const displayWeather = race.weather ?? (snapshotCurrent ? venueSnapshot?.weather ?? null : null);
+  const displayWeather = race.weather ?? (snapshotUsable ? venueSnapshot?.weather ?? null : null);
   const displayTrack = race.trackCondition ?? snapshotTrack;
-  const conditionMissingText = venueSnapshot?.sourceObservedDate && !snapshotCurrent
-    ? "当日値未取得（" + venueSnapshot.sourceObservedDate.slice(5).replace("-","/") + "時点）"
-    : "未取得";
+  const conditionMissingText = venueSnapshot && !snapshotUsable ? "再取得待ち" : "未取得";
 
   return (
     <SafeAreaView edges={["top"]} style={styles.safeArea}>
@@ -530,7 +542,13 @@ export function RaceCardScreen({
 
             {race.status !== "OFFICIAL" ? (
               <View style={styles.card}>
-                <Text style={styles.muted}>{status === "データ修復中" ? "正式出馬表を自動修復中。" : "正式出馬表の公開待ち。"}</Text>
+                <Text style={styles.muted}>{
+                  status === "データ修復中"
+                    ? busy === "race"
+                      ? "正式出馬表を自動修復中。"
+                      : "正式出馬表を取得できていない。再取得してください。"
+                    : "正式出馬表の公開待ち。"
+                }</Text>
                 <TouchableOpacity style={styles.inlineButton} onPress={() => void refreshCard()} disabled={busy != null}>
                   <Text style={styles.inlineButtonText}>{busy === "race" ? "修復中" : "出馬表を再取得"}</Text>
                 </TouchableOpacity>

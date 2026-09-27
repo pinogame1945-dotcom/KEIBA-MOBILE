@@ -556,7 +556,9 @@ export async function getRaceResultCompleteness(raceKey: string) {
   ]);
   const resultCount=Number(result?.count??0),payoutCount=Number(payout?.count??0);
   const conditionsComplete=Boolean(race?.weather&&race?.trackCondition);
-  return {resultCount,payoutCount,conditionsComplete,complete:resultCount>0&&payoutCount>0&&conditionsComplete};
+  // Result settlement and race conditions are independent LIVE layers. Missing
+  // weather/track must not make an already stored result look incomplete forever.
+  return {resultCount,payoutCount,conditionsComplete,complete:resultCount>0&&payoutCount>0};
 }
 
 export type OfficialRaceConditions = {

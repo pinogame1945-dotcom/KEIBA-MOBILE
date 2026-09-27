@@ -11,6 +11,7 @@
     "live-data:contract": "node scripts/live-data-contract.mjs",
     "live-ui:contract": "node scripts/live-ui-contract.mjs",
     "smoke:jra:entry": "node --experimental-strip-types scripts/jra-entry-regression.ts",
+    "smoke:jra:venue": "node --experimental-strip-types scripts/jra-venue-regression.ts",
     "expo:config:smoke": "expo config --type public --json > /dev/null",
     "android:smoke": "expo export --platform android --output-dir dist-android-smoke --clear",
     "android:prebuild:smoke": "expo prebuild --platform android --no-install --clean"
