@@ -42,10 +42,11 @@ export async function loadOddsRows(
   raceKey: string,
   betType: OddsBetType,
   selection?: number | null,
+  limit = 120,
 ) {
   return selection == null
-    ? getLatestOddsRows(raceKey, betType, 1000)
-    : getOddsRowsForSelection(raceKey, betType, selection, 1000);
+    ? getLatestOddsRows(raceKey, betType, limit)
+    : getOddsRowsForSelection(raceKey, betType, selection, limit);
 }
 
 export async function loadLatestWinOdds(raceKey: string) {
