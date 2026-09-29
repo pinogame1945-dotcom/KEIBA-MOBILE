@@ -10,6 +10,7 @@ import { refreshScheduleTarget } from "../services/scheduleTargetService";
 
 type Props = {
   onOpenWeek: () => void;
+  onOpenArchive: () => void;
   onOpenRace: (raceKey: string) => void;
   active?: boolean;
   cacheRevision?: number;
@@ -63,7 +64,7 @@ function localClock(iso: string) {
   return String(date.getHours()).padStart(2, "0") + ":" + String(date.getMinutes()).padStart(2, "0");
 }
 
-export function HomeScreen({ onOpenWeek, onOpenRace, active = true, cacheRevision = 0 }: Props) {
+export function HomeScreen({ onOpenWeek, onOpenArchive, onOpenRace, active = true, cacheRevision = 0 }: Props) {
   const [notices, setNotices] = useState<RaceNotice[]>([]);
   const [races, setRaces] = useState<JraRace[]>([]);
   const [refreshing, setRefreshing] = useState(false);
@@ -155,6 +156,16 @@ export function HomeScreen({ onOpenWeek, onOpenRace, active = true, cacheRevisio
           </Text>
         </TouchableOpacity>
 
+        <TouchableOpacity style={styles.archiveCard} onPress={onOpenArchive}>
+          <View style={styles.rowBetween}>
+            <View>
+              <Text style={styles.archiveTitle}>過去のレース</Text>
+              <Text style={styles.archiveSub}>保存済みの開催・結果を確認</Text>
+            </View>
+            <Text style={styles.chevronDark}>›</Text>
+          </View>
+        </TouchableOpacity>
+
         {nextRace ? (
           <TouchableOpacity style={styles.nextCard} onPress={() => onOpenRace(nextRace.raceKey)}>
             <View style={styles.rowBetween}>
@@ -243,6 +254,9 @@ const styles = StyleSheet.create({
   todayMini: { color: "#9ca3af", fontSize: 8, fontWeight: "800", marginTop: 2 },
   noRaceText: { color: "#9ca3af", fontSize: 11 },
   weekVenueText: { marginTop: 12, color: "#4b5563", fontSize: 11, fontWeight: "900" },
+  archiveCard: { backgroundColor: "#fff", borderRadius: 18, paddingHorizontal: 18, paddingVertical: 15 },
+  archiveTitle: { color: "#111827", fontSize: 17, fontWeight: "900" },
+  archiveSub: { color: "#6b7280", fontSize: 11, marginTop: 3 },
   nextCard: { backgroundColor: "#111827", borderRadius: 22, padding: 18 },
   nextLabel: { color: "#9ca3af", fontSize: 11, fontWeight: "900", letterSpacing: 1.2 },
   startPill: { backgroundColor: "#374151", borderRadius: 999, paddingHorizontal: 11, paddingVertical: 6 },
