@@ -3,6 +3,7 @@ import { AppState, BackHandler, StyleSheet, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { BottomNav } from "./src/components/BottomNav";
 import { HomeScreen } from "./src/screens/HomeScreen";
+import { PastRacesScreen } from "./src/screens/PastRacesScreen";
 import { RaceCardScreen } from "./src/screens/RaceCardScreen";
 import { WeekRacesScreen } from "./src/screens/WeekRacesScreen";
 import { syncLiveCache, warmRaceData } from "./src/services/liveSyncService";
@@ -10,6 +11,7 @@ import { syncLiveCache, warmRaceData } from "./src/services/liveSyncService";
 type ScreenRoute =
   | { id: number; type: "HOME" }
   | { id: number; type: "WEEK" }
+  | { id: number; type: "ARCHIVE" }
   | { id: number; type: "RACE"; raceKey: string };
 
 export default function App() {
@@ -58,6 +60,16 @@ export default function App() {
     });
   }, []);
 
+  const openArchive = useCallback(() => {
+    setStack((prev) => {
+      const existingArchive = prev.map((route) => route.type).lastIndexOf("ARCHIVE");
+      if (existingArchive >= 0) return prev.slice(0, existingArchive + 1);
+
+      const parent = prev[prev.length - 1]?.type === "RACE" ? prev.slice(0, -1) : prev;
+      return [...parent, { id: nextRouteId.current++, type: "ARCHIVE" }];
+    });
+  }, []);
+
   const openRace = useCallback((raceKey: string) => {
     setStack((prev) => {
       const last = prev[prev.length - 1];
@@ -97,10 +109,18 @@ export default function App() {
                     active={active}
                     cacheRevision={cacheRevision}
                     onOpenWeek={openWeek}
+                    onOpenArchive={openArchive}
                     onOpenRace={openRace}
                   />
                 ) : route.type === "WEEK" ? (
                   <WeekRacesScreen
+                    active={active}
+                    cacheRevision={cacheRevision}
+                    onBack={stack.length > 1 ? goBack : undefined}
+                    onOpenRace={openRace}
+                  />
+                ) : route.type === "ARCHIVE" ? (
+                  <PastRacesScreen
                     active={active}
                     cacheRevision={cacheRevision}
                     onBack={stack.length > 1 ? goBack : undefined}
