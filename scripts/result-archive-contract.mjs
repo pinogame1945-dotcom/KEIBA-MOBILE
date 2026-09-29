@@ -68,6 +68,7 @@ assert.ok(
 
 const archiveWeeks = readFileSync(new URL("../src/domain/raceArchiveWeeks.ts", import.meta.url), "utf8");
 const weekScreen = readFileSync(new URL("../src/screens/WeekRacesScreen.tsx", import.meta.url), "utf8");
+const pastScreen = readFileSync(new URL("../src/screens/PastRacesScreen.tsx", import.meta.url), "utf8");
 const raceScreen = readFileSync(new URL("../src/screens/RaceCardScreen.tsx", import.meta.url), "utf8");
 
 assert.ok(
@@ -78,9 +79,11 @@ assert.ok(
 );
 assert.ok(
   archiveWeeks.includes("gap>=0&&gap<=3") &&
-  weekScreen.includes("storedWeeks.map") &&
+  !weekScreen.includes("storedWeeks.map") &&
+  pastScreen.includes("storedWeeks.map") &&
+  pastScreen.includes("listRacesForDates(selected.dates)") &&
   raceScreen.includes("listRaceNavigationGroup(nextRace.raceDate)"),
-  "phase 3 archive navigation must preserve multi-day JRA meeting blocks in the existing race UI",
+  "archive navigation must preserve multi-day JRA meeting blocks on the dedicated past-races page",
 );
 
 console.log("Result archive contract: PASS");
