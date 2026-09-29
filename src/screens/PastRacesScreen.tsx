@@ -1,19 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View,
-} from "react-native";
+import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { JraRace, VenueConditionSnapshot } from "../domain/live";
+import type { StoredRaceWeek } from "../domain/raceArchiveWeeks";
 import { raceStartEpoch } from "../data/jra/oddsAvailability";
 import { raceCourseLabel, raceStateLabel } from "../ui/raceLabels";
 import {
-  getVenueConditionSnapshot, listRaceKeysWithResults, listRacingWeekRaces, localTodayIso,
+  getVenueConditionSnapshot, listRaceKeysWithResults, listRacesForDates, listRacingWeekRaces,
+  listStoredRaceWeeks,
 } from "../repositories/liveRepository";
-import { refreshScheduleTarget } from "../services/scheduleTargetService";
-import { refreshTodayVenueConditions } from "../services/venueConditionService";
-import {
-  refreshCurrentWeekRaceData, type RaceRefreshProgress,
-} from "../services/raceRefreshService";
 
 type Props = {
   onOpenRace: (raceKey: string) => void;
@@ -30,14 +25,15 @@ function dateLabel(iso: string) {
   return `${m}/${d}(${WEEKDAY[date.getDay()]})`;
 }
 
-function localTimeLabel(iso: string | null) {
-  if (!iso) return null;
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return null;
-  return String(date.getHours()).padStart(2,"0") + ":" + String(date.getMinutes()).padStart(2,"0");
+function archiveWeekLabel(week: StoredRaceWeek) {
+  const [sy,sm,sd]=week.startDate.split("-").map(Number);
+  const [ey,em,ed]=week.endDate.split("-").map(Number);
+  if (week.startDate===week.endDate) return `${sy}/${sm}/${sd}`;
+  if (sy===ey) return `${sy}/${sm}/${sd}〜${em}/${ed}`;
+  return `${sy}/${sm}/${sd}〜${ey}/${em}/${ed}`;
 }
 
-export function WeekRacesScreen({
+export function PastRacesScreen({
   onOpenRace,
   onBack,
   active = true,
@@ -45,40 +41,37 @@ export function WeekRacesScreen({
 }: Props) {
   const [races, setRaces] = useState<JraRace[]>([]);
   const [resultKeys, setResultKeys] = useState<Set<string>>(new Set());
+  const [storedWeeks, setStoredWeeks] = useState<StoredRaceWeek[]>([]);
+  const [selectedWeekKey, setSelectedWeekKey] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedVenue, setSelectedVenue] = useState<string | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
-  const [progress, setProgress] = useState<RaceRefreshProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [venueSnapshot, setVenueSnapshot] = useState<VenueConditionSnapshot | null>(null);
 
   const load = useCallback(async () => {
-    const nextRaces = await listRacingWeekRaces();
-    const dates = [...new Set(nextRaces.map((race) => race.raceDate))];
-    const keys = await listRaceKeysWithResults(dates);
+    const [currentRaces,weeks] = await Promise.all([
+      listRacingWeekRaces(),
+      listStoredRaceWeeks(),
+    ]);
+    const currentDates = new Set(currentRaces.map((race) => race.raceDate));
+    const archiveWeeks = weeks.filter((week) => !week.dates.some((date) => currentDates.has(date)));
+    setStoredWeeks(archiveWeeks);
+
+    const selected = archiveWeeks.find((week) => week.key === selectedWeekKey) ?? archiveWeeks[0] ?? null;
+    if (!selected) {
+      setSelectedWeekKey(null);
+      setRaces([]);
+      setResultKeys(new Set());
+      return [] as JraRace[];
+    }
+    if (selectedWeekKey !== selected.key) setSelectedWeekKey(selected.key);
+
+    const nextRaces = await listRacesForDates(selected.dates);
+    const keys = await listRaceKeysWithResults(selected.dates);
     setRaces(nextRaces);
     setResultKeys(new Set(keys));
     return nextRaces;
-  }, []);
-
-  const refresh = useCallback(async () => {
-    if (refreshing) return;
-    setRefreshing(true);
-    setError(null);
-    try {
-      await refreshScheduleTarget(true);
-      await load();
-      await Promise.allSettled([
-        refreshTodayVenueConditions(true).then(() => load()),
-        refreshCurrentWeekRaceData(setProgress, async () => { await load(); }),
-      ]);
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setRefreshing(false);
-    }
-  }, [load, refreshing]);
+  }, [selectedWeekKey]);
 
   useEffect(() => {
     if (!active) return;
@@ -87,16 +80,25 @@ export function WeekRacesScreen({
     });
   }, [active, cacheRevision, load]);
 
+  useEffect(() => {
+    setSelectedDate(null);
+    setSelectedVenue(null);
+    setVenueSnapshot(null);
+    setError(null);
+  }, [selectedWeekKey]);
+
   const actualDates = useMemo(
     () => [...new Set(races.map((race) => race.raceDate))].sort(),
     [races],
   );
 
   useEffect(() => {
-    if (!actualDates.length) return;
+    if (!actualDates.length) {
+      setSelectedDate(null);
+      return;
+    }
     if (selectedDate && actualDates.includes(selectedDate)) return;
-    const today = localTodayIso();
-    setSelectedDate(actualDates.includes(today) ? today : actualDates[0]);
+    setSelectedDate(actualDates[0]);
   }, [actualDates, selectedDate]);
 
   const dayRaces = useMemo(
@@ -128,18 +130,7 @@ export function WeekRacesScreen({
       .then((snapshot) => { if (!cancelled) setVenueSnapshot(snapshot ?? null); })
       .catch(() => { if (!cancelled) setVenueSnapshot(null); });
     return () => { cancelled = true; };
-  }, [selectedDate, selectedVenue, cacheRevision, refreshing]);
-
-  const now = Date.now();
-  const nextRaceKey = visible
-    .filter((race) => {
-      const start = raceStartEpoch(race);
-      return race.scheduleStatus === "ACTIVE" &&
-        race.raceStatus !== "CANCELLED" &&
-        race.raceStatus !== "ABANDONED" &&
-        start != null && start > now;
-    })
-    .sort((a,b) => (raceStartEpoch(a) ?? Infinity) - (raceStartEpoch(b) ?? Infinity))[0]?.raceKey ?? null;
+  }, [selectedDate, selectedVenue, cacheRevision]);
 
   const snapshotUsable = Boolean(
     venueSnapshot &&
@@ -213,6 +204,8 @@ export function WeekRacesScreen({
     ].filter((value): value is string => Boolean(value));
   };
 
+  const now = Date.now();
+
   return (
     <SafeAreaView edges={["top"]} style={styles.safeArea}>
       <ScrollView contentContainerStyle={styles.container}>
@@ -220,35 +213,42 @@ export function WeekRacesScreen({
           <View style={styles.headerSide}>
             {onBack ? <TouchableOpacity onPress={onBack}><Text style={styles.backArrow}>←</Text></TouchableOpacity> : null}
           </View>
-          <Text style={styles.title}>今週のレース</Text>
-          <TouchableOpacity style={styles.headerSide} onPress={() => void refresh()} disabled={refreshing}>
-            <Text style={styles.live}>{refreshing ? "更新中" : "● LIVE"}</Text>
-          </TouchableOpacity>
+          <Text style={styles.title}>過去のレース</Text>
+          <View style={styles.headerSide}><Text style={styles.archiveMark}>保存済み</Text></View>
         </View>
 
-        {refreshing && (
-          <View style={styles.progress}>
-            <ActivityIndicator />
-            <Text style={styles.progressText}>{progress?.message ?? "JRAを確認中"}</Text>
-          </View>
-        )}
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
-        {!!actualDates.length && (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.dateTabs}>
-            {actualDates.map((date) => {
-              const isToday = date === localTodayIso();
+        {!!storedWeeks.length ? (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.weekTabs}>
+            {storedWeeks.map((week) => {
+              const activeWeek = selectedWeekKey === week.key;
               return (
                 <TouchableOpacity
-                  key={date}
-                  style={[styles.dateTab, selectedDate === date && styles.dateTabActive]}
-                  onPress={() => setSelectedDate(date)}
+                  key={week.key}
+                  style={[styles.weekTab, activeWeek && styles.weekTabActive]}
+                  onPress={() => setSelectedWeekKey(week.key)}
                 >
-                  <Text style={[styles.dateText, selectedDate === date && styles.dateTextActive]}>{dateLabel(date)}</Text>
-                  {isToday ? <Text style={[styles.todayText, selectedDate === date && styles.todayTextActive]}>今日</Text> : null}
+                  <Text style={[styles.weekText, activeWeek && styles.weekTextActive]}>
+                    {archiveWeekLabel(week)}
+                  </Text>
                 </TouchableOpacity>
               );
             })}
+          </ScrollView>
+        ) : null}
+
+        {!!actualDates.length && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.dateTabs}>
+            {actualDates.map((date) => (
+              <TouchableOpacity
+                key={date}
+                style={[styles.dateTab, selectedDate === date && styles.dateTabActive]}
+                onPress={() => setSelectedDate(date)}
+              >
+                <Text style={[styles.dateText, selectedDate === date && styles.dateTextActive]}>{dateLabel(date)}</Text>
+              </TouchableOpacity>
+            ))}
           </ScrollView>
         )}
 
@@ -270,24 +270,21 @@ export function WeekRacesScreen({
           <View style={styles.venueStatus}>
             <View>
               <Text style={styles.venueStatusTitle}>{selectedVenue}</Text>
-              <Text style={styles.venueStatusMeta}>
-                {venueStatusText}
-              </Text>
+              <Text style={styles.venueStatusMeta}>{venueStatusText}</Text>
             </View>
             <Text style={styles.updated}>{venueSourceText}</Text>
           </View>
         ) : null}
 
-        {!races.length && !refreshing ? (
+        {!storedWeeks.length ? (
           <View style={styles.emptyCard}>
-            <Text style={styles.emptyTitle}>今週の開催データがない</Text>
-            <Text style={styles.emptyBody}>右上のLIVE更新でJRA開催日程を取得する。</Text>
+            <Text style={styles.emptyTitle}>保存済みの過去レースがない</Text>
+            <Text style={styles.emptyBody}>今週のレースが終了すると、ここから後で確認できる。</Text>
           </View>
         ) : null}
 
         {visible.map((race) => {
           const state = raceStateLabel(race, resultKeys.has(race.raceKey), now);
-          const isNext = race.raceKey === nextRaceKey;
           const isPast = (raceStartEpoch(race) ?? Infinity) <= now;
           const isFinal = state === "結果確定";
           const isDisrupted = race.scheduleStatus === "RESCHEDULED" ||
@@ -297,8 +294,7 @@ export function WeekRacesScreen({
               key={race.raceKey}
               style={[
                 styles.raceCard,
-                isNext && styles.raceCardNext,
-                isPast && !isNext && !isDisrupted && !isFinal && styles.raceCardPast,
+                isPast && !isDisrupted && !isFinal && styles.raceCardPast,
                 isDisrupted && styles.raceCardDisrupted,
               ]}
               onPress={() => onOpenRace(race.raceKey)}
@@ -306,8 +302,7 @@ export function WeekRacesScreen({
               <View style={styles.raceNoBlock}>
                 <Text style={styles.raceNo}>{race.raceNo}R</Text>
                 <Text style={styles.start}>{race.startTime ?? "--:--"}</Text>
-                {isNext ? <Text style={styles.nextBadge}>NEXT</Text> : null}
-                {!isNext && isFinal ? <Text style={styles.resultBadge}>結果確定</Text> : null}
+                {isFinal ? <Text style={styles.resultBadge}>結果確定</Text> : null}
               </View>
               <View style={styles.raceMain}>
                 <Text style={styles.raceName}>{race.raceName ?? "レース名取得待ち"}</Text>
@@ -334,17 +329,21 @@ const styles = StyleSheet.create({
   headerSide: { width: 72, alignItems: "flex-start" },
   backArrow: { color: "#111827", fontSize: 28, fontWeight: "800" },
   title: { fontSize: 24, fontWeight: "900", color: "#111827" },
-  live: { color: "#6b7280", fontSize: 11, fontWeight: "900" },
-  progress: { backgroundColor: "#fff", borderRadius: 12, padding: 10, flexDirection: "row", alignItems: "center", gap: 8 },
-  progressText: { color: "#374151", fontSize: 12, fontWeight: "700", flex: 1 },
+  archiveMark: { color: "#6b7280", fontSize: 10, fontWeight: "900" },
   error: { backgroundColor: "#fee2e2", color: "#991b1b", borderRadius: 12, padding: 10, fontSize: 11 },
+  weekTabs: { gap: 7, paddingVertical: 1 },
+  weekTab: {
+    minHeight: 34, borderRadius: 17, backgroundColor: "#e5e7eb",
+    paddingHorizontal: 13, alignItems: "center", justifyContent: "center",
+  },
+  weekTabActive: { backgroundColor: "#111827" },
+  weekText: { color: "#4b5563", fontSize: 11, fontWeight: "900" },
+  weekTextActive: { color: "#fff" },
   dateTabs: { gap: 8 },
   dateTab: { minWidth: 112, backgroundColor: "#e5e7eb", borderRadius: 18, paddingVertical: 13, paddingHorizontal: 12, alignItems: "center" },
   dateTabActive: { backgroundColor: "#111827" },
   dateText: { color: "#4b5563", fontSize: 13, fontWeight: "900" },
   dateTextActive: { color: "#fff" },
-  todayText: { color: "#6b7280", fontSize: 9, fontWeight: "800", marginTop: 2 },
-  todayTextActive: { color: "#9ca3af" },
   venueTabs: { backgroundColor: "#e5e7eb", borderRadius: 16, padding: 4, flexDirection: "row" },
   venueTab: { flex: 1, minHeight: 54, borderRadius: 13, alignItems: "center", justifyContent: "center" },
   venueTabActive: { backgroundColor: "#fff" },
@@ -358,13 +357,11 @@ const styles = StyleSheet.create({
   emptyTitle: { fontSize: 17, fontWeight: "900", color: "#111827" },
   emptyBody: { marginTop: 5, color: "#6b7280", fontSize: 12 },
   raceCard: { backgroundColor: "#fff", borderRadius: 18, padding: 15, flexDirection: "row", alignItems: "center", borderWidth: 1, borderColor: "transparent" },
-  raceCardNext: { borderWidth: 2, borderColor: "#111827" },
   raceCardPast: { opacity: 0.55 },
   raceCardDisrupted: { opacity: 0.72 },
   raceNoBlock: { width: 68, alignItems: "center" },
   raceNo: { fontSize: 20, fontWeight: "900", color: "#111827" },
   start: { marginTop: 3, color: "#6b7280", fontSize: 12, fontWeight: "700" },
-  nextBadge: { marginTop: 5, backgroundColor: "#111827", color: "#fff", borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2, fontSize: 8, fontWeight: "900" },
   resultBadge: {
     marginTop: 5, backgroundColor: "#111827", color: "#fff", borderRadius: 999,
     paddingHorizontal: 8, paddingVertical: 3, fontSize: 8, fontWeight: "900",

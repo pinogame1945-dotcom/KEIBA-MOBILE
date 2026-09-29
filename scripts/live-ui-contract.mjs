@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 
 const week = readFileSync(new URL("../src/screens/WeekRacesScreen.tsx", import.meta.url), "utf8");
 const race = readFileSync(new URL("../src/screens/RaceCardScreen.tsx", import.meta.url), "utf8");
+const past = readFileSync(new URL("../src/screens/PastRacesScreen.tsx", import.meta.url), "utf8");
+const home = readFileSync(new URL("../src/screens/HomeScreen.tsx", import.meta.url), "utf8");
 const app = readFileSync(new URL("../App.tsx", import.meta.url), "utf8");
 
 assert.ok(
@@ -120,13 +122,26 @@ assert.ok(
 );
 
 assert.ok(
-  week.includes("listStoredRaceWeeks") &&
-  week.includes('selectedWeekKey === "CURRENT"') &&
-  week.includes('setSelectedWeekKey("CURRENT")') &&
-  week.includes("archiveWeekLabel") &&
-  week.includes("保存済み") &&
-  week.includes("listRacesForDates(selectedWeek.dates)"),
-  "week screen must browse stored race weeks without creating a separate archive UI",
+  !week.includes("listStoredRaceWeeks") &&
+  !week.includes("archiveWeekLabel") &&
+  !week.includes("selectedWeekKey") &&
+  week.includes("<Text style={styles.title}>今週のレース</Text>"),
+  "current-week screen must remain current-only after archive page separation",
+);
+assert.ok(
+  past.includes("listStoredRaceWeeks") &&
+  past.includes("archiveWeekLabel") &&
+  past.includes("storedWeeks.map") &&
+  past.includes("<Text style={styles.title}>過去のレース</Text>") &&
+  past.includes("listRacesForDates(selected.dates)"),
+  "past races must live on a dedicated archive page",
+);
+assert.ok(
+  home.includes("onOpenArchive") &&
+  home.includes("<Text style={styles.archiveTitle}>過去のレース</Text>") &&
+  app.includes('{ id: number; type: "ARCHIVE" }') &&
+  app.includes("<PastRacesScreen"),
+  "home and app routing must expose the dedicated past-races page",
 );
 assert.ok(
   race.includes("listRaceNavigationGroup(nextRace.raceDate)") &&
