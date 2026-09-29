@@ -57,6 +57,14 @@ assert.ok(
   "warm/sync paths must repair layers independently instead of full-week blocking",
 );
 assert.ok(
+  sync.includes('const FULL_TARGET="live_full_target_fingerprint"') &&
+  sync.includes("getScheduleTarget()") &&
+  sync.includes("fullTarget===currentFingerprint") &&
+  sync.includes("!fullTargetCurrent||!parsedTime(lastFull)") &&
+  sync.includes("setWeekMeta(FULL_TARGET,currentFingerprint)"),
+  "a new schedule fingerprint must bypass the previous week's six-hour full-card throttle",
+);
+assert.ok(
   repository.includes("resultReady=resultCount>0") &&
   repository.includes("payoutReady=payoutCount>0") &&
   repository.includes("complete:resultReady"),

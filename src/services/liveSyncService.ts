@@ -1,6 +1,6 @@
 import { raceStartEpoch } from "../data/jra/oddsAvailability";
 import {
-  getFinalOddsConfirmedAt,getFinalOddsProbeAt,getOddsAvailability,getRace,getRaceResultCompleteness,
+  getFinalOddsConfirmedAt,getFinalOddsProbeAt,getOddsAvailability,getRace,getRaceResultCompleteness,getScheduleTarget,
   getWeekEntries,getWeekMeta,listIncompleteArchiveRaces,listRacingWeekRaces,localTodayIso,setWeekMeta,
 } from "../repositories/liveRepository";
 import { refreshLatestOdds } from "./oddsService";
@@ -12,6 +12,7 @@ import { refreshTodayVenueConditions } from "./venueConditionService";
 const SCHEDULE_ATTEMPT="live_schedule_attempt_at";
 const FULL_ATTEMPT="live_full_attempt_at";
 const FULL_SUCCESS="live_full_success_at";
+const FULL_TARGET="live_full_target_fingerprint";
 let syncPromise:Promise<void>|null=null;
 const warmPromises=new Map<string,Promise<void>>();
 
@@ -38,18 +39,22 @@ async function refreshScheduleIfDue(onMutation?:()=>void){
 }
 async function refreshCardLayer(onMutation?:()=>void){
   const now=Date.now();
-  const [state,lastFull,lastAttempt]=await Promise.all([
+  const [state,lastFull,lastAttempt,target,fullTarget]=await Promise.all([
     getWeekMeta("race_fetch_state"),getWeekMeta(FULL_SUCCESS),getWeekMeta(FULL_ATTEMPT),
+    getScheduleTarget(),getWeekMeta(FULL_TARGET),
   ]);
+  const currentFingerprint=target?.fingerprint??null;
+  const fullTargetCurrent=Boolean(currentFingerprint&&fullTarget===currentFingerprint);
   const incomplete=state==="RUNNING"||state==="FAILED"||state==="PARTIAL";
   const fullDue=incomplete
     ?!parsedTime(lastAttempt)||now-parsedTime(lastAttempt)>=15*60*1000
-    :!parsedTime(lastFull)||now-parsedTime(lastFull)>=6*60*60*1000;
+    :!fullTargetCurrent||!parsedTime(lastFull)||now-parsedTime(lastFull)>=6*60*60*1000;
   if(fullDue){
     await setWeekMeta(FULL_ATTEMPT,new Date(now).toISOString());
     const result=await refreshCurrentWeekRaceData(undefined,onMutation);
     if(result.pendingMeetings===0){
       await setWeekMeta(FULL_SUCCESS,new Date().toISOString());
+      if(currentFingerprint)await setWeekMeta(FULL_TARGET,currentFingerprint);
     }
   }else{
     await refreshKnownRaceStates(onMutation);
