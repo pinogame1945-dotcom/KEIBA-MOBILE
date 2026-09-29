@@ -1,4 +1,5 @@
 import type { ScheduleTarget } from "../domain/live";
+import { carryForwardAdjacentScheduleDates } from "../domain/scheduleWindow";
 import { fetchJraHtml } from "../data/jra/http";
 import { calendarDayUrl,parseCalendarDay,parseCalendarDisruptions,scheduleTargetFingerprint } from "../data/jra/scheduleParser";
 import { getScheduleTarget,localTodayIso,saveScheduleTarget } from "../repositories/liveRepository";
@@ -77,7 +78,10 @@ export async function refreshScheduleTarget(force=false):Promise<ScheduleTarget>
     }
     const first=future[0];
     selectedDates=future.filter(date=>dayDistance(first,date)<=3);
-    if(yesterdayIsRace&&dayDistance(yesterday,first)<=1)selectedDates=[yesterday,...selectedDates];
+    selectedDates=carryForwardAdjacentScheduleDates(cachedDates,selectedDates);
+    if(yesterdayIsRace&&dayDistance(yesterday,first)<=1&&!selectedDates.includes(yesterday)){
+      selectedDates=[yesterday,...selectedDates];
+    }
   }
 
   const meetings:ScheduleTarget["meetings"]=[],disruptions:ScheduleTarget["disruptions"]=[],sourceUrls:string[]=[];
