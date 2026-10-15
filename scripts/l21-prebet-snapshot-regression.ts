@@ -54,6 +54,7 @@ rejected((_a,_e,r)=>{r[0].odds=null;},"QUOTE_MISSING_OR_INVALID");
 rejected((_a,_e,r)=>{r[0].sourceUrl="https://example.net";},"QUOTE_MISSING_OR_INVALID");
 rejected((_a,_e,r)=>{r[0].selection1=5;},"NONSTARTER_OR_NULL");
 rejected((_a,_e,_r,c)=>{c.is_final=true as never;},"FINAL_PROBE_NOT_PROVEN_NONFINAL");
+rejected((_a,_e,_r,c)=>{c.final_probe_checked_at="2025-01-06T13:02:01+09:00";},"NONATOMIC_SEQUENTIAL_ODDS_CAPTURE_TOO_STALE");
 rejected((_a,_e,_r,c)=>{c.final_probe_checked_at="2025-01-06T14:26:00+09:00";},"POST_CUTOFF_OR_START");
 rejected((_a,_e,_r,c)=>{c.bet_cutoff_at="2025-01-06T14:40:00+09:00";},"POST_CUTOFF_OR_START");
 console.log("KEIBA_MOBILE_L21_FULL_THREE_BETTYPE_PLUS_WIN_SOURCE_CONTRACT_PASS",rows.length);
