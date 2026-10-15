@@ -841,6 +841,27 @@ export async function getLatestOddsRows(
   );
 }
 
+/** Original atomic-label odds_history rows, NOT a mixed odds_current view.
+ * One shared observed_at is mandatory to avoid silently mixing T30/T10/T5.
+ * Caller must verify all expected WIN/QUINELLA/TRIO/TRIFECTA combinations.
+ * Expired/rescheduled snapshots are excluded (invalidated_at IS NULL).
+ */
+export async function getL21OriginalOddsRowsAt(raceKey:string,observedAt:string) {
+  const db=await getLiveDb();
+  return db.getAllAsync<OddsRow>(
+    `SELECT race_key AS raceKey,bet_type AS betType,selection_1 AS selection1,
+      NULLIF(selection_2,-1) AS selection2,NULLIF(selection_3,-1) AS selection3,
+      odds,odds_min AS oddsMin,odds_max AS oddsMax,observed_at AS observedAt,
+      source_url AS sourceUrl
+     FROM odds_history
+     WHERE race_key=? AND observed_at=? AND invalidated_at IS NULL
+       AND bet_type IN ('WIN','QUINELLA','TRIO','TRIFECTA')
+     ORDER BY bet_type,selection_1,selection_2,selection_3
+     LIMIT 10000`,
+    raceKey,observedAt,
+  );
+}
+
 export async function getOddsRowsForSelection(
   raceKey: string,
   betType: OddsBetType,
