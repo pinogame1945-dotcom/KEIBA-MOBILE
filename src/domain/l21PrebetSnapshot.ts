@@ -53,7 +53,7 @@ function choose(n:number,k:number){
 export function buildL21PrebetSnapshot(
   race:JraRace, entries:JraEntry[], rows:OddsRow[], evidence:L21CaptureEvidence,
 ):L21PrebetSnapshot{
-  if(!/^202[2-5]\d{8}$/.test(race.canonicalRaceId??"")){
+  if(!/^202[2-6]\d{8}$/.test(race.canonicalRaceId??"")){
     throw new Error("L21_CANONICAL_RACE_ID_REQUIRED_2026_SEALED");
   }
   if(race.status!=="OFFICIAL"||race.raceStatus!=="SCHEDULED"||
@@ -65,6 +65,11 @@ export function buildL21PrebetSnapshot(
     throw new Error("L21_MISSING_RACE_CLOCK");
   }
   const start=iso(race.raceDate+"T"+race.startTime+":00+09:00","START");
+  // 2026 sealed applies to retrospective result-based backtests, NOT
+  // strictly future real-world JRA LIVE odds before an unrun race.
+  if((race.canonicalRaceId??"").startsWith("2026")&&start<=Date.now()){
+    throw new Error("L21_2026_HISTORICAL_REPLAY_SEALED");
+  }
   const end=iso(evidence.bet_cutoff_at,"CUTOFF");
   const probe=iso(evidence.final_probe_checked_at,"PROBE");
   if(!(probe<end&&end<start)){
@@ -130,6 +135,10 @@ export function buildL21PrebetSnapshot(
   if(observed.size!==1)throw new Error("L21_ODDS_CAPTURE_MIXED_TIMES");
   const observedAt=[...observed][0];
   const observedMs=iso(observedAt,"ODDS");
+  if((race.canonicalRaceId??"").startsWith("2026")&&
+     (observedMs>Date.now()||probe>Date.now())){
+    throw new Error("L21_2026_NOT_YET_OBSERVED_FUTURE_SOURCE");
+  }
   if(!(observedMs<=probe&&probe<end)){
     throw new Error("L21_QUOTES_NOT_PROBED_BEFORE_CUTOFF");
   }
