@@ -46,7 +46,7 @@ const rejected=(change:(a:JraRace[],e:JraEntry[],r:OddsRow[],c:typeof capture)=>
 };
 rejected((a)=>{a[0].status="SCHEDULED";},"NO_OFFICIAL_PRESTART_CARD");
 rejected((a)=>{a[0].raceStatus="COMPLETED";},"NO_OFFICIAL_PRESTART_CARD");
-rejected((a)=>{a[0].canonicalRaceId="202607010212";},"2026_SEALED");
+rejected((a)=>{a[0].canonicalRaceId="202607010212";},"2026_HISTORICAL_REPLAY_SEALED");
 rejected((_a,_e,r)=>{r.pop();},"MISSING_FULL_PHYSICAL_BET_BOOK");
 rejected((_a,_e,r)=>{r.push({...r[0]});},"DUPLICATE_PHYSICAL_ODDS");
 rejected((_a,_e,r)=>{r[0].observedAt="2025-01-06T13:01:00+09:00";},"ODDS_CAPTURE_MIXED_TIMES");
