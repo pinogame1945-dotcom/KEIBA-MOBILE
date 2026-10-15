@@ -45,6 +45,8 @@ jobs:
         run: npm run smoke:jra:venue
       - name: JRA final odds runtime regression
         run: npm run smoke:jra:final-odds
+      - name: L2.1 prebet full JRA quote export contract
+        run: npm run smoke:l21:prebet-export
       - name: JRA result condition regression
         run: npm run smoke:jra:result-condition
       - name: netkeiba result condition regression
