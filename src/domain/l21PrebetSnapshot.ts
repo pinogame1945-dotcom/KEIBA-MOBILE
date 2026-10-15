@@ -142,6 +142,13 @@ export function buildL21PrebetSnapshot(
   if(!(observedMs<=probe&&probe<end)){
     throw new Error("L21_QUOTES_NOT_PROBED_BEFORE_CUTOFF");
   }
+  // The collector shares a batch-start timestamp while fetching each
+  // bet type sequentially. It does NOT provide atomic JRA publication
+  // timestamps for each individual market. Refuse a stale/multi-minute
+  // pseudo-snapshot to prevent L2 from treating old odds as current.
+  if(probe-observedMs>120_000){
+    throw new Error("L21_NONATOMIC_SEQUENTIAL_ODDS_CAPTURE_TOO_STALE");
+  }
   for(const type of TYPES){
     if(counters[type]!==required[type]){
       throw new Error("L21_MISSING_FULL_PHYSICAL_BET_BOOK_"+type+"_"+
